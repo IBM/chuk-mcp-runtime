@@ -776,10 +776,18 @@ class MCPServer:
                 headers_dict = request.scope.get("headers_dict", {})
                 set_request_headers(headers_dict)
 
-                async with transport.connect_sse(
-                    request.scope, request.receive, request._send
-                ) as streams:
-                    await server.run(streams[0], streams[1], opts)
+                try:
+                    async with transport.connect_sse(
+                        request.scope, request.receive, request._send
+                    ) as streams:
+                        await server.run(streams[0], streams[1], opts)
+                except Exception as e:
+                    # Handle client disconnections gracefully
+                    if "ClosedResourceError" in str(type(e).__name__):
+                        self.logger.debug("Client disconnected from SSE stream")
+                    else:
+                        self.logger.error("Error in SSE handler: %s", e)
+                        raise
                 return Response()
 
             async def health(request):
@@ -837,7 +845,15 @@ class MCPServer:
                 headers_dict = scope.get("headers_dict", {})
                 set_request_headers(headers_dict)
 
-                await session_manager.handle_request(scope, receive, send)
+                try:
+                    await session_manager.handle_request(scope, receive, send)
+                except Exception as e:
+                    # Handle client disconnections gracefully
+                    if "ClosedResourceError" in str(type(e).__name__):
+                        self.logger.debug("Client disconnected from StreamableHTTP stream")
+                    else:
+                        self.logger.error("Error in StreamableHTTP handler: %s", e)
+                        raise
                 return Response()
 
             async def health(request: Request) -> PlainTextResponse:
