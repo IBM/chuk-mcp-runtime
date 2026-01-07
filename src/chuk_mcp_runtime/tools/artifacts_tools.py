@@ -28,6 +28,7 @@ logger = get_logger("chuk_mcp_runtime.tools.artifacts")
 _artifact_store: Optional[ArtifactStore] = None
 _artifacts_config: Dict[str, Any] = {}
 _enabled_tools: Set[str] = set()
+_store_lock: Optional[Any] = None  # Initialized on first use (asyncio.Lock)
 
 # FIXED: Default tool configuration - DISABLED by default
 DEFAULT_TOOL_CONFIG = {
@@ -131,35 +132,47 @@ def is_tool_enabled(tool_name: str) -> bool:
 
 
 async def get_artifact_store() -> ArtifactStore:
-    """Get or create the global artifact store instance."""
-    global _artifact_store
+    """Get or create the global artifact store instance with thread-safe initialization."""
+    global _artifact_store, _store_lock
+    import asyncio
+
+    # Initialize lock on first call
+    if _store_lock is None:
+        _store_lock = asyncio.Lock()
 
     if _artifact_store is None:
-        # Use configuration or environment variables or sensible defaults
-        storage_provider = _artifacts_config.get("storage_provider") or os.getenv(
-            "ARTIFACT_STORAGE_PROVIDER", "filesystem"
-        )
-        session_provider = _artifacts_config.get("session_provider") or os.getenv(
-            "ARTIFACT_SESSION_PROVIDER", "memory"
-        )
-        bucket = _artifacts_config.get("bucket") or os.getenv("ARTIFACT_BUCKET", "mcp-runtime")
+        async with _store_lock:
+            # Double-check after acquiring lock
+            if _artifact_store is None:
+                # Use configuration or environment variables or sensible defaults
+                storage_provider = _artifacts_config.get("storage_provider") or os.getenv(
+                    "ARTIFACT_STORAGE_PROVIDER", "filesystem"
+                )
+                session_provider = _artifacts_config.get("session_provider") or os.getenv(
+                    "ARTIFACT_SESSION_PROVIDER", "memory"
+                )
+                bucket = _artifacts_config.get("bucket") or os.getenv(
+                    "ARTIFACT_BUCKET", "mcp-runtime"
+                )
 
-        # Set up filesystem root if using filesystem storage
-        if storage_provider == "filesystem":
-            fs_root = (
-                _artifacts_config.get("filesystem_root")
-                or os.getenv("ARTIFACT_FS_ROOT")
-                or os.path.expanduser("~/.chuk_mcp_artifacts")
-            )
-            os.environ["ARTIFACT_FS_ROOT"] = fs_root
+                # Set up filesystem root if using filesystem storage
+                if storage_provider == "filesystem":
+                    fs_root = (
+                        _artifacts_config.get("filesystem_root")
+                        or os.getenv("ARTIFACT_FS_ROOT")
+                        or os.path.expanduser("~/.chuk_mcp_artifacts")
+                    )
+                    os.environ["ARTIFACT_FS_ROOT"] = fs_root
 
-        _artifact_store = ArtifactStore(
-            storage_provider=storage_provider,
-            session_provider=session_provider,
-            bucket=bucket,
-        )
+                _artifact_store = ArtifactStore(
+                    storage_provider=storage_provider,
+                    session_provider=session_provider,
+                    bucket=bucket,
+                )
 
-        logger.debug(f"Created artifact store: {storage_provider}/{session_provider} -> {bucket}")
+                logger.info(
+                    f"Initialized artifact store: {storage_provider}/{session_provider} -> {bucket}"
+                )
 
     return _artifact_store
 

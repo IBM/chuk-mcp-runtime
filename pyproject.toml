@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chuk-mcp-runtime"
-version = "0.10.7"
+version = "0.10.8"
 description = "Generic CHUK MCP Runtime for MCP servers"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -17,8 +17,8 @@ dependencies = [
   "pyjwt>=2.10.1",
   "cryptography>=44.0.3",
   "uvicorn>=0.34.0",
-  "chuk-artifacts>=0.8.1",
-  "chuk-sessions>=0.5.1",
+  "chuk-artifacts>=0.10.1",
+  "chuk-sessions>=0.6",
   "mcp>=1.23.0",
 ]
 
@@ -166,6 +166,16 @@ disable_error_code = ["import-untyped"]
 [[tool.mypy.overrides]]
 module = "chuk_mcp_runtime.grid.hub_sandbox"
 disable_error_code = ["attr-defined"]
+
+# Artifacts tools - uses external library types
+[[tool.mypy.overrides]]
+module = "chuk_mcp_runtime.tools.artifacts_tools"
+disable_error_code = ["index", "return-value", "misc"]
+
+# Event store - override signature compatibility
+[[tool.mypy.overrides]]
+module = "chuk_mcp_runtime.server.event_store"
+disable_error_code = ["override"]
 
 [tool.ruff]
 # Ruff configuration

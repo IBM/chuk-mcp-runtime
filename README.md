@@ -142,6 +142,7 @@ uv pip install tzdata
 
 - [What's New in v0.10.4](#whats-new-in-v0104)
 - [What's New in v0.9.0](#whats-new-in-v090)
+- [Redis Cluster Support](#redis-cluster-support-new-in-v0104)
 - [Key Concepts](#key-concepts)
 - [Configuration Reference](#configuration-reference)
 - [Proxy Configuration Examples](#proxy-configuration-examples)
@@ -159,7 +160,11 @@ uv pip install tzdata
 
 ### 🎯 Pydantic-Native Artifact Integration
 
-**Enhanced type safety and better developer experience** with full pydantic integration from `chuk-artifacts` 0.8.1+:
+**Enhanced type safety and better developer experience** with full pydantic integration from `chuk-artifacts` 0.10.1+ (includes Redis Cluster support):
+
+**Updated Dependencies**:
+- `chuk-artifacts` 0.10.1 - Redis Cluster support, enhanced VFS providers
+- `chuk-sessions` 0.6.0 - Redis Cluster support with automatic detection
 
 #### ✅ Type-Safe Artifact Metadata
 
@@ -254,6 +259,87 @@ files = await list_user_files(mime_prefix="text/*")   # Search user files
 ```
 
 **See:** `CHANGELOG_V09.md` for complete release notes, `ARTIFACTS_V08_SUMMARY.md` for detailed guide.
+
+## Redis Cluster Support (NEW in v0.10.4)
+
+CHUK MCP Runtime now supports **Redis Cluster** for high availability and horizontal scaling through automatic cluster detection in `chuk-sessions` 0.6.0+ and `chuk-artifacts` 0.10.1+.
+
+### Quick Start
+
+**Standalone Redis** (existing):
+```bash
+export REDIS_URL=redis://localhost:6379
+export ARTIFACT_SESSION_PROVIDER=redis
+```
+
+**Redis Cluster** (new):
+```bash
+# Comma-separated node list - automatic cluster detection
+export REDIS_URL=redis://node1:7000,node2:7001,node3:7002
+export ARTIFACT_SESSION_PROVIDER=redis
+```
+
+**With TLS**:
+```bash
+# Standalone with TLS
+export REDIS_URL=rediss://secure-redis:6380
+export REDIS_TLS_INSECURE=1  # For self-signed certificates
+
+# Cluster with TLS
+export REDIS_URL=rediss://node1:7000,node2:7001,node3:7002
+export REDIS_TLS_INSECURE=1
+```
+
+### Environment Isolation
+
+Prevent key collisions when multiple environments share the same Redis cluster:
+
+```bash
+# Development
+export ENVIRONMENT=dev
+export DEPLOYMENT_ID=local
+
+# Staging
+export ENVIRONMENT=staging
+export DEPLOYMENT_ID=us-west-1
+export SANDBOX_REGISTRY_TTL=3600  # 1 hour
+
+# Production
+export ENVIRONMENT=production
+export DEPLOYMENT_ID=us-east-1
+export SANDBOX_REGISTRY_TTL=86400  # 24 hours
+```
+
+This creates isolated namespaces:
+- Dev: `dev:local:sbx:*`
+- Staging: `staging:us-west-1:sbx:*`
+- Production: `production:us-east-1:sbx:*`
+
+### Configuration Variables
+
+| Variable | Description | Default | Example |
+|----------|-------------|---------|---------|
+| `REDIS_URL` | Redis connection URL (standalone or cluster) | `redis://localhost:6379` | `redis://n1:7000,n2:7001` |
+| `REDIS_TLS_INSECURE` | Disable SSL certificate verification | `0` | `1` |
+| `ENVIRONMENT` | Environment name for namespace isolation | `dev` | `production`, `staging` |
+| `DEPLOYMENT_ID` | Deployment identifier for namespace isolation | `default` | `us-east-1`, `us-west-1` |
+| `SANDBOX_REGISTRY_TTL` | Sandbox registry entry TTL in seconds | `86400` | `3600`, `7200` |
+
+### Architecture Notes
+
+**Automatic Detection:**
+- Single host URL → Uses `redis.asyncio.Redis`
+- Multi-host URL (comma-separated) → Uses `redis.asyncio.cluster.RedisCluster`
+- Database selector (`/0`) is auto-removed for cluster compatibility
+
+**Thread Safety:**
+- All singletons use double-check locking with `asyncio.Lock`
+- Safe for concurrent initialization in multi-instance deployments
+
+**Namespace Isolation:**
+- Keys are prefixed with `{ENVIRONMENT}:{DEPLOYMENT_ID}:sbx:`
+- Prevents collisions when multiple environments share Redis
+- Required for staging/production on same cluster
 
 ## Core Components Overview
 
@@ -2190,6 +2276,17 @@ CHUK_MCP_LOG_LEVEL=DEBUG chuk-mcp-server --config prod.yaml
 | `SANDBOX_ID` | Another alternative | `dev-alice` | Simplest form |
 | `POD_NAME` | Kubernetes pod name | `api-deployment-abc123` | **Auto-detected in K8s** |
 
+### Redis Configuration (Session Storage)
+
+| Variable | Purpose | Example | When to Use |
+|----------|---------|---------|-------------|
+| `REDIS_URL` | Redis connection URL | `redis://localhost:6379` | Standalone Redis |
+| `REDIS_URL` | Redis Cluster URL | `redis://n1:7000,n2:7001,n3:7002` | **Cluster mode** (comma-separated nodes) |
+| `REDIS_TLS_INSECURE` | Skip SSL cert verification | `1` | Self-signed certificates |
+| `ENVIRONMENT` | Environment name for namespacing | `production`, `staging`, `dev` | Multi-environment isolation |
+| `DEPLOYMENT_ID` | Deployment identifier | `us-east-1`, `us-west-1` | Prevent key collisions |
+| `SANDBOX_REGISTRY_TTL` | Sandbox registry TTL (seconds) | `86400` | Customize expiration |
+
 **Sandbox ID Resolution** (first match wins):
 1. Config file: `sessions.sandbox_id`
 2. `MCP_SANDBOX_ID` environment variable
@@ -2208,6 +2305,35 @@ export MCP_SANDBOX_ID="tenant-${CUSTOMER_ID}"
 
 # Kubernetes: automatic per-pod isolation
 # POD_NAME is auto-detected, no config needed!
+```
+
+**Redis Cluster with Environment Isolation** (Kubernetes example):
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chuk-mcp-runtime
+spec:
+  replicas: 3  # Safe to scale horizontally with Redis Cluster
+  template:
+    spec:
+      containers:
+      - name: app
+        image: chuk-mcp-runtime:latest
+        env:
+          # Redis Cluster connection
+          - name: REDIS_URL
+            value: "redis://redis-0:7000,redis-1:7001,redis-2:7002"
+          - name: ARTIFACT_SESSION_PROVIDER
+            value: "redis"
+
+          # Environment isolation
+          - name: ENVIRONMENT
+            value: "production"
+          - name: DEPLOYMENT_ID
+            value: "us-east-1"
+          - name: SANDBOX_REGISTRY_TTL
+            value: "86400"  # 24 hours
 ```
 
 ### Artifact Storage
@@ -2299,13 +2425,35 @@ export IBM_COS_INSTANCE_CRN=crn:v1:bluemix:...
 ```
 
 **Redis Session Provider** (recommended for production):
+
+Redis Standalone:
 ```bash
 export ARTIFACT_SESSION_PROVIDER=redis
-export REDIS_URL=redis://localhost:6379/0
+export REDIS_URL=redis://localhost:6379
 # Or with TLS:
-export REDIS_URL=rediss://prod-redis:6379/0
-export REDIS_TLS_INSECURE=0  # Set to 1 to skip cert verification
+export REDIS_URL=rediss://prod-redis:6379
+export REDIS_TLS_INSECURE=0  # Set to 1 for self-signed certs
 ```
+
+**Redis Cluster** (NEW - for high availability and horizontal scaling):
+```bash
+# Comma-separated node list (automatic cluster detection)
+export ARTIFACT_SESSION_PROVIDER=redis
+export REDIS_URL=redis://node1:7000,node2:7001,node3:7002
+
+# With TLS
+export REDIS_URL=rediss://node1:7000,node2:7001,node3:7002
+export REDIS_TLS_INSECURE=0  # Set to 1 for self-signed certs
+
+# Environment isolation (prevents key collisions)
+export ENVIRONMENT=production  # or staging, dev
+export DEPLOYMENT_ID=us-east-1  # unique per deployment
+```
+
+**Environment Isolation**: When multiple environments share the same Redis cluster, use `ENVIRONMENT` and `DEPLOYMENT_ID` to create isolated namespaces:
+- Dev: `dev:local:sbx:*`
+- Staging: `staging:us-west:sbx:*`
+- Production: `production:us-east:sbx:*`
 
 **Complete Examples:** See `.env.example` for full configuration examples for each use case.
 

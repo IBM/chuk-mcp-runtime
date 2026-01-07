@@ -19,29 +19,43 @@ import uuid
 from typing import AsyncContextManager, Callable, Optional
 
 import aiohttp
+from chuk_sessions import provider_factory  # ← reuse existing providers
 
 from chuk_mcp_runtime.common.mcp_tool_decorator import TOOLS_REGISTRY, mcp_tool
 from chuk_mcp_runtime.proxy.tool_wrapper import create_proxy_tool
 from chuk_mcp_runtime.server.logging_config import get_logger
-from chuk_mcp_runtime.session import (
-    provider_factory,  # type: ignore[attr-defined]  # ← reuse existing providers
-)
 
 logger = get_logger("hub")
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Registry helpers (shared with session provider)
 # ─────────────────────────────────────────────────────────────────────────────
-_SBXPREFIX = "sbx:"
-_TTL = 24 * 3600  # 24 h
+
+# Environment-based namespace (prevents staging/prod collisions)
+_ENVIRONMENT = os.getenv("ENVIRONMENT", os.getenv("ENV", "dev"))
+_DEPLOYMENT_ID = os.getenv("DEPLOYMENT_ID", "default")
+_SBXPREFIX = f"{_ENVIRONMENT}:{_DEPLOYMENT_ID}:sbx:"
+
+# Configurable TTL (default 24h, override via environment)
+_TTL = int(os.getenv("SANDBOX_REGISTRY_TTL", str(24 * 3600)))
 
 _session_factory: Callable[[], AsyncContextManager] | None = None
+_factory_lock = asyncio.Lock()
 
 
 async def _get_session_factory():
+    """Get session factory with thread-safe initialization."""
     global _session_factory  # noqa: PLW0603
+
     if _session_factory is None:
-        _session_factory = provider_factory.factory_for_env()
+        async with _factory_lock:
+            # Double-check after acquiring lock
+            if _session_factory is None:
+                _session_factory = provider_factory.factory_for_env()
+                logger.info(
+                    f"Initialized session factory for sandbox registry (namespace: {_SBXPREFIX})"
+                )
+
     return _session_factory
 
 
