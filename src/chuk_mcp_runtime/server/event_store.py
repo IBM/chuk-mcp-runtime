@@ -37,7 +37,7 @@ class EventEntry:
 class InMemoryEventStore(EventStore):
     """
     Simple in-memory implementation of the EventStore interface for resumability.
-    This is primarily intended for examples and testing, not for production use
+    This is primarily intended for examples and testing, not for deployed use
     where a persistent storage solution would be more appropriate.
 
     This implementation keeps only the last N events per stream for memory efficiency.

@@ -14,7 +14,7 @@ The demo:
 
 Result: With memory provider, files are NOT isolated (all files visible
 in all sessions). For true isolation, use Redis session provider or
-production storage configuration.
+persistent storage configuration.
 
 Run:
     uv run python examples/session_isolation_demo.py

@@ -210,13 +210,13 @@ uv run python examples/session_demo.py
 - Creating multiple independent sessions
 - Testing file isolation between sessions
 - Understanding isolation behavior by provider
-- Memory vs production isolation differences
+- Memory vs persistent storage isolation differences
 
 ```bash
 uv run python examples/session_isolation_demo.py
 ```
 
-**Note:** With memory provider, files are visible across all sessions. For true isolation, use Redis session provider or production storage configuration.
+**Note:** With memory provider, files are visible across all sessions. For true isolation, use Redis session provider or persistent storage configuration.
 
 ### Streaming
 **`stream_demo.py`** - Server-Sent Events (SSE) streaming

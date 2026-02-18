@@ -43,12 +43,12 @@ mcp_servers:
     enabled: true
     type: stdio
     # Directory containing the echo server; “uv” will run from here
-    location: /Users/chrishay/chris-source/mcp-advantage/mcp-echo-server
+    location: /path/to/mcp-echo-server
     # The launcher command (uv) and its arguments
     command: uv
     args:
       - --directory
-      - /Users/chrishay/chris-source/mcp-advantage/mcp-echo-server
+      - /path/to/mcp-echo-server
       - run
       - src/mcp_echo_server/main.py
 

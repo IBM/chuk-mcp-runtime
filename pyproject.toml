@@ -4,12 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chuk-mcp-runtime"
-version = "0.11"
+version = "0.11.1"
 description = "Generic CHUK MCP Runtime for MCP servers"
 readme = "README.md"
 requires-python = ">=3.11"
-license = {text = "MIT"}
-authors = [{name = "Chris Hay", email = "your.email@example.com"}]
+license = {text = "Apache-2.0"}
 
 dependencies = [
   "pydantic>=2.10.6",

@@ -5,11 +5,11 @@
 [![PyPI](https://img.shields.io/pypi/v/chuk-mcp-runtime.svg)](https://pypi.org/project/chuk-mcp-runtime/)
 [![Test](https://github.com/chrishayuk/chuk-mcp-runtime/actions/workflows/test.yml/badge.svg)](https://github.com/chrishayuk/chuk-mcp-runtime/actions/workflows/test.yml)
 ![Python Version](https://img.shields.io/badge/python-3.11%2B-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
+![License](https://img.shields.io/badge/license-Apache%202.0-blue)
 ![Coverage](https://img.shields.io/badge/coverage-97%25-brightgreen)
 ![Official MCP SDK](https://img.shields.io/badge/built%20on-Official%20MCP%20SDK-blue)
 
-A robust, production-ready runtime for the official Model Context Protocol (MCP) — adds proxying, session management, JWT auth, **persistent user storage with scopes**, and progress notifications.
+A robust runtime for the official Model Context Protocol (MCP) — adds proxying, session management, JWT auth, **persistent user storage with scopes**, and progress notifications.
 
 > ✅ **Continuously tested against the latest official MCP SDK releases** for guaranteed protocol compatibility.
 
@@ -442,7 +442,7 @@ Different Sandbox: "staging-app"
 
 **Storage providers:**
 - `vfs-filesystem` - Local disk with VFS support (development)
-- `vfs-s3` - AWS S3 with streaming + multipart uploads (production)
+- `vfs-s3` - AWS S3 with streaming + multipart uploads (distributed/cloud)
 - `vfs-sqlite` - SQLite with structured queries (embedded)
 - `memory` - In-memory (testing, ephemeral)
 
@@ -619,7 +619,7 @@ server:
 # sse_config.yaml
 server:
   type: "sse"
-  # For production: add auth: "bearer" and set JWT_SECRET_KEY
+  # For deployment: add auth: "bearer" and set JWT_SECRET_KEY
 
 sse:
   host: "0.0.0.0"
@@ -634,7 +634,7 @@ sse:
 # http_config.yaml
 server:
   type: "streamable-http"
-  # For production: add auth: "bearer" and set JWT_SECRET_KEY
+  # For deployment: add auth: "bearer" and set JWT_SECRET_KEY
 
 streamable-http:
   host: "0.0.0.0"
@@ -2201,7 +2201,7 @@ curl -s http://127.0.0.1:3000/mcp \
 
 ## Security Features & Hardening
 
-**Hardening checklist (production):**
+**Security hardening checklist:**
 
 - ✅ `server.auth: bearer` and `JWT_SECRET_KEY` set via a secrets manager
 - ✅ Rotate JWT secrets; set `JWT_LEEWAY` for clock drift
@@ -2424,7 +2424,7 @@ export IBM_COS_INSTANCE_CRN=crn:v1:bluemix:...
 # Pros: Enterprise SLA, compliance certs | Cons: IBM Cloud account
 ```
 
-**Redis Session Provider** (recommended for production):
+**Redis Session Provider** (recommended for distributed deployments):
 
 Redis Standalone:
 ```bash
