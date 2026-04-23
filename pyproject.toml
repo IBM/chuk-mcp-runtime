@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chuk-mcp-runtime"
-version = "0.11.1"
+version = "0.11.2"
 description = "Generic CHUK MCP Runtime for MCP servers"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -62,6 +62,7 @@ dev = [
 [tool.pytest.ini_options]
 # Pytest configuration
 testpaths = ["tests"]
+pythonpath = ["src"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
@@ -84,7 +85,10 @@ markers = [
 filterwarnings = [
     "ignore::DeprecationWarning:chuk_sessions.*",
     "ignore::pytest.PytestDeprecationWarning",
-    "ignore::pytest.PytestUnknownMarkWarning"
+    "ignore::pytest.PytestUnknownMarkWarning",
+    # Test fixtures deliberately use short keys to exercise JWT validation paths.
+    # Match by message text so this works across all PyJWT versions.
+    "ignore:.*below the minimum recommended length.*"
 ]
 
 [tool.coverage.run]

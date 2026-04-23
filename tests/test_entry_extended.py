@@ -145,33 +145,18 @@ def patch_entry(monkeypatch):
     monkeypatch.setattr(entry, "find_project_root", lambda *a, **kw: "/tmp")
 
     # Mock native session management
-    monkeypatch.setattr(entry, "MCPSessionManager", MockMCPSessionManager)
-    monkeypatch.setattr(entry, "SessionContext", MockSessionContext)
+    # Only patch attributes that actually exist in the current entry.py.
+    # MCPSessionManager and SessionContext were removed from entry.py imports;
+    # the whole session module is already mocked via conftest.
     monkeypatch.setattr(entry, "create_mcp_session_manager", lambda config: MockMCPSessionManager())
-
-    # Mock session integration helper
-    async def mock_with_session_auto_inject(session_manager, tool_name, args):
-        # Simulate session injection for artifact tools
-        artifact_tools = {
-            "upload_file",
-            "write_file",
-            "read_file",
-            "delete_file",
-            "list_session_files",
-            "list_directory",
-            "copy_file",
-            "move_file",
-            "get_file_metadata",
-            "get_presigned_url",
-            "get_storage_stats",
-        }
-
-        if tool_name in artifact_tools and "session_id" not in args:
-            session_id = await session_manager.auto_create_session_if_needed()
-            return {**args, "session_id": session_id}
-        return args
-
-    monkeypatch.setattr(entry, "with_session_auto_inject", mock_with_session_auto_inject)
+    # Guard optional attributes so tests run against both old and new entry.py
+    for _attr, _val in [
+        ("MCPSessionManager", MockMCPSessionManager),
+        ("SessionContext", MockSessionContext),
+        ("with_session_auto_inject", None),
+    ]:
+        if hasattr(entry, _attr):
+            monkeypatch.setattr(entry, _attr, _val)
 
     # Mock the server classes
     monkeypatch.setattr(entry, "ServerRegistry", DummyServerRegistry)

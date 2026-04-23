@@ -27,7 +27,58 @@ mock_session_ctx = ContextVar("session_context", default=None)
 mock_user_ctx = ContextVar("user_context", default=None)
 
 
-# Mock ArtifactStore that can be properly awaited
+# ---------------------------------------------------------------------------
+# Artifact helpers - real exception + metadata class so ownership tests work
+# ---------------------------------------------------------------------------
+
+
+class ArtifactNotFoundError(Exception):
+    """Real exception so 'except ArtifactNotFoundError' works in tool functions."""
+
+    pass
+
+
+class ArtifactMetadata:
+    """Minimal metadata object matching chuk_artifacts.models.ArtifactMetadata."""
+
+    def __init__(
+        self,
+        artifact_id="artifact-1",
+        scope="session",
+        owner_id=None,
+        session_id=None,
+        filename="test.txt",
+        mime="text/plain",
+        bytes=0,
+        summary="",
+        stored_at="",
+        ttl=900,
+    ):
+        self.artifact_id = artifact_id
+        self.scope = scope
+        self.owner_id = owner_id
+        self.session_id = session_id
+        self.filename = filename
+        self.mime = mime
+        self.bytes = bytes
+        self.summary = summary
+        self.stored_at = stored_at
+        self.ttl = ttl
+
+    def model_dump(self):
+        return {
+            "artifact_id": self.artifact_id,
+            "scope": self.scope,
+            "owner_id": self.owner_id,
+            "session_id": self.session_id,
+            "filename": self.filename,
+            "mime": self.mime,
+            "bytes": self.bytes,
+            "summary": self.summary,
+            "stored_at": self.stored_at,
+        }
+
+
 class MockArtifactStore:
     """Mock artifact store that doesn't cause await errors."""
 
@@ -43,10 +94,17 @@ class MockArtifactStore:
         pass
 
 
-# Create the mock module
+# Create the mock module - expose real exception and metadata so tool imports work
 mock_artifacts_mod = MagicMock()
 mock_artifacts_mod.ArtifactStore = MockArtifactStore
+mock_artifacts_mod.ArtifactNotFoundError = ArtifactNotFoundError
+mock_artifacts_mod.ArtifactMetadata = ArtifactMetadata
 sys.modules["chuk_artifacts"] = mock_artifacts_mod
+
+# Also register chuk_artifacts.models so 'from chuk_artifacts.models import ArtifactMetadata' works
+mock_artifacts_models = MagicMock()
+mock_artifacts_models.ArtifactMetadata = ArtifactMetadata
+sys.modules["chuk_artifacts.models"] = mock_artifacts_models
 
 
 # Enhanced Native Session Management Mocks
@@ -59,6 +117,8 @@ class MockMCPSessionManager:
         self.auto_extend_threshold = auto_extend_threshold
         self._sessions = {}
         self._current_session = None
+        self._last_session = None
+        self._last_session_user = None
 
     async def create_session(self, user_id=None, ttl_hours=None, metadata=None):
         session_id = f"session-{len(self._sessions)}-{user_id or 'anon'}"
@@ -128,9 +188,19 @@ class MockMCPSessionManager:
     async def auto_create_session_if_needed(self, user_id=None):
         current = self.get_current_session()
         if current and await self.validate_session(current):
+            self._last_session = current
             return current
+
+        # Mirror real behaviour: only reuse _last_session for the same user
+        if self._last_session and await self.validate_session(self._last_session):
+            if user_id is None or user_id == self._last_session_user:
+                self.set_current_session(self._last_session, user_id)
+                return self._last_session
+
         session_id = await self.create_session(user_id=user_id, metadata={"auto_created": True})
         self.set_current_session(session_id, user_id)
+        self._last_session = session_id
+        self._last_session_user = user_id
         return session_id
 
     def get_cache_stats(self):
@@ -215,6 +285,26 @@ def mock_get_session_or_none():
 def mock_get_user_or_none():
     """Mock get_user_or_none that uses context variables."""
     return mock_user_ctx.get()
+
+
+def mock_require_user():
+    """Mock require_user that uses the actual user context variable."""
+    user_id = mock_user_ctx.get()
+    if not user_id:
+        from tests.conftest import MockSessionError
+
+        raise MockSessionError("No user context available - authentication required")
+    return user_id
+
+
+def mock_set_user_context(user_id):
+    """Mock set_user_context - sets mock_user_ctx and returns a reset token."""
+    return mock_user_ctx.set(user_id)
+
+
+def mock_reset_user_context(token):
+    """Mock reset_user_context - resets mock_user_ctx using the token."""
+    mock_user_ctx.reset(token)
 
 
 # Mock session auto-injection helper
@@ -329,8 +419,11 @@ session_mgmt_mod.create_mcp_session_manager = _create_mock_session_manager
 session_mgmt_mod._session_ctx = mock_session_ctx
 session_mgmt_mod._user_ctx = mock_user_ctx
 session_mgmt_mod.require_session = mock_require_session
+session_mgmt_mod.require_user = mock_require_user
 session_mgmt_mod.get_session_or_none = mock_get_session_or_none
 session_mgmt_mod.get_user_or_none = mock_get_user_or_none
+session_mgmt_mod.set_user_context = mock_set_user_context
+session_mgmt_mod.reset_user_context = mock_reset_user_context
 session_mgmt_mod.with_session_auto_inject = mock_with_session_auto_inject
 session_mgmt_mod.session_required = mock_session_required
 session_mgmt_mod.session_optional = mock_session_optional
@@ -458,13 +551,16 @@ def run_async(coro):
     return loop.run_until_complete(coro)
 
 
-class TestAsyncMock(MagicMock):
-    """Mock that works with async functions - renamed to avoid pytest collection."""
+class AsyncMockHelper(MagicMock):
+    """MagicMock subclass with async __call__ / context-manager support.
+
+    Named AsyncMockHelper (not TestAsyncMock) so pytest does not mistake it
+    for a test class and emit PytestCollectionWarning.
+    """
 
     async def __call__(self, *args, **kwargs):
-        return super(TestAsyncMock, self).__call__(*args, **kwargs)
+        return super().__call__(*args, **kwargs)
 
-    # Add support for async context manager
     async def __aenter__(self, *args, **kwargs):
         return self.__enter__(*args, **kwargs)
 
@@ -571,16 +667,22 @@ def create_test_server():
 
 # Export commonly used classes for test modules
 __all__ = [
+    "ArtifactNotFoundError",
+    "ArtifactMetadata",
+    "MockArtifactStore",
     "MockMCPSessionManager",
     "MockSessionContext",
     "MockProxyServerManager",
     "DummyMCPServer",
     "DummyServerRegistry",
-    "TestAsyncMock",
+    "AsyncMockHelper",
     "run_async",
     "mock_require_session",
+    "mock_require_user",
     "mock_get_session_or_none",
     "mock_get_user_or_none",
+    "mock_set_user_context",
+    "mock_reset_user_context",
     "mock_session_required",
     "mock_session_optional",
     "MockSessionError",

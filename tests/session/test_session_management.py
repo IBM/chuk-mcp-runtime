@@ -116,5 +116,67 @@ class TestIntegrationScenarios:
         assert len(set(session_ids)) == 3, f"Sessions should be different but got: {session_ids}"
 
 
+class TestLastSessionUserIsolation:
+    """Verify that _last_session is never shared between different users."""
+
+    @pytest.mark.asyncio
+    async def test_different_users_get_different_sessions(self):
+        """User B must never inherit User A's _last_session."""
+        mgr = MockMCPSessionManager()
+
+        sess_a = await mgr.auto_create_session_if_needed(user_id="alice")
+        assert mgr._last_session == sess_a
+        assert mgr._last_session_user == "alice"
+
+        # Simulate a new connection: clear the context variable so mgr sees no
+        # current session, as happens when a different HTTP request arrives.
+        mock_session_ctx.set(None)
+        mgr._current_session = None
+
+        sess_b = await mgr.auto_create_session_if_needed(user_id="bob")
+        assert sess_b != sess_a, "Bob must not reuse Alice's session"
+        assert mgr._last_session_user == "bob"
+
+    @pytest.mark.asyncio
+    async def test_same_user_reuses_last_session(self):
+        """The same user should reuse their existing session (STDIO pattern)."""
+        mgr = MockMCPSessionManager()
+
+        sess1 = await mgr.auto_create_session_if_needed(user_id="alice")
+
+        mock_session_ctx.set(None)
+        mgr._current_session = None
+
+        sess2 = await mgr.auto_create_session_if_needed(user_id="alice")
+        assert sess2 == sess1, "Alice should reuse her own session"
+
+    @pytest.mark.asyncio
+    async def test_anonymous_sessions_reuse_in_stdio_mode(self):
+        """Anonymous (STDIO) sessions continue to reuse _last_session."""
+        mgr = MockMCPSessionManager()
+
+        sess1 = await mgr.auto_create_session_if_needed(user_id=None)
+
+        mock_session_ctx.set(None)
+        mgr._current_session = None
+
+        sess2 = await mgr.auto_create_session_if_needed(user_id=None)
+        assert sess2 == sess1, "Anonymous STDIO session should be reused"
+
+    @pytest.mark.asyncio
+    async def test_last_session_user_tracked_correctly(self):
+        mgr = MockMCPSessionManager()
+        assert mgr._last_session_user is None
+
+        await mgr.auto_create_session_if_needed(user_id="carol")
+        assert mgr._last_session_user == "carol"
+
+        mock_session_ctx.set(None)
+        mgr._current_session = None
+
+        await mgr.auto_create_session_if_needed(user_id="dave")
+        assert mgr._last_session_user == "dave"
+
+
 if __name__ == "__main__":
     pytest.main(["-xvs", __file__])

@@ -74,6 +74,9 @@ from chuk_mcp_runtime.session.native_session_management import (
     MCPSessionManager,
     SessionContext,
     create_mcp_session_manager,
+    get_user_or_none,
+    reset_user_context,
+    set_user_context,
     with_session_auto_inject,
 )
 from chuk_mcp_runtime.types import RuntimeConfig, ServerType, StorageProvider
@@ -140,6 +143,15 @@ def parse_tool_arguments(arguments: Union[str, dict[str, Any]]) -> dict[str, Any
 
     # For any other type, convert to string and wrap
     return {"value": str(arguments)}
+
+
+def _extract_user_id(payload: dict) -> Optional[str]:
+    """Extract user ID from a JWT claims dict, trying standard claim names in order."""
+    if not payload:
+        return None
+    return (
+        payload.get("sub") or payload.get("user_id") or payload.get("uid") or payload.get("id")
+    ) or None
 
 
 # ------------------------------------------------------------------------------
@@ -495,6 +507,7 @@ class MCPServer:
                 async with SessionContext(
                     self.session_manager,
                     session_id=effective_session_id,
+                    user_id=get_user_or_none(),
                     auto_create=True,
                 ) as session_id:
                     self.logger.info(
@@ -776,6 +789,13 @@ class MCPServer:
                 headers_dict = request.scope.get("headers_dict", {})
                 set_request_headers(headers_dict)
 
+                # Propagate authenticated user identity into context vars for the
+                # duration of this SSE connection so artifact tools can enforce
+                # per-user isolation (set by AuthMiddleware from JWT payload).
+                user_payload = request.scope.get("user", {})
+                user_id = _extract_user_id(user_payload)
+                user_token = set_user_context(user_id) if user_id else None
+
                 try:
                     async with transport.connect_sse(
                         request.scope, request.receive, request._send
@@ -788,6 +808,9 @@ class MCPServer:
                     else:
                         self.logger.error("Error in SSE handler: %s", e)
                         raise
+                finally:
+                    if user_token is not None:
+                        reset_user_context(user_token)
                 return Response()
 
             async def health(request):
@@ -845,6 +868,13 @@ class MCPServer:
                 headers_dict = scope.get("headers_dict", {})
                 set_request_headers(headers_dict)
 
+                # Propagate authenticated user identity into context vars for the
+                # duration of this request so artifact tools can enforce per-user
+                # isolation (set by AuthMiddleware from JWT payload).
+                user_payload = scope.get("user", {})
+                user_id = _extract_user_id(user_payload)
+                user_token = set_user_context(user_id) if user_id else None
+
                 try:
                     await session_manager.handle_request(scope, receive, send)
                 except Exception as e:
@@ -854,6 +884,9 @@ class MCPServer:
                     else:
                         self.logger.error("Error in StreamableHTTP handler: %s", e)
                         raise
+                finally:
+                    if user_token is not None:
+                        reset_user_context(user_token)
                 return Response()
 
             async def health(request: Request) -> PlainTextResponse:

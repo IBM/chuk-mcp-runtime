@@ -620,14 +620,27 @@ async def copy_file(
     """
     _check_tool_enabled("copy_file")
 
-    # Get session from context (NEVER from parameters!)
-    from chuk_mcp_runtime.session.native_session_management import require_session
+    # Get session and user from context (NEVER from parameters!)
+    from chuk_mcp_runtime.session.native_session_management import (
+        get_user_or_none,
+        require_session,
+    )
 
-    require_session()  # Validate session exists
+    session_id = require_session()
+    user_id = get_user_or_none()
 
     store = await get_artifact_store()
 
     try:
+        # Verify ownership before copying
+        metadata: ArtifactMetadata = await store.metadata(artifact_id)
+        if metadata.scope == "user":
+            if not user_id or user_id != metadata.owner_id:
+                raise ValueError("Access denied: file belongs to different user")
+        elif metadata.scope == "session":
+            if session_id != metadata.session_id:
+                raise ValueError("Access denied: file belongs to different session")
+
         copy_meta = {
             "copied_via": "mcp",
             "copy_time": datetime.now().isoformat(),
@@ -635,13 +648,14 @@ async def copy_file(
             **(meta or {}),
         }
 
-        # Use the actual API parameters that work
         new_artifact_id = await store.copy_file(
             artifact_id, new_filename=new_filename, new_meta=copy_meta
         )
 
         return f"File copied successfully. New artifact ID: {new_artifact_id}"
 
+    except ArtifactNotFoundError:
+        raise ValueError(f"File not found: {artifact_id}")
     except Exception as e:
         raise ValueError(f"Failed to copy file: {str(e)}")
 
@@ -667,14 +681,27 @@ async def move_file(
     """
     _check_tool_enabled("move_file")
 
-    # Get session from context (NEVER from parameters!)
-    from chuk_mcp_runtime.session.native_session_management import require_session
+    # Get session and user from context (NEVER from parameters!)
+    from chuk_mcp_runtime.session.native_session_management import (
+        get_user_or_none,
+        require_session,
+    )
 
-    require_session()  # Validate session exists
+    session_id = require_session()
+    user_id = get_user_or_none()
 
     store = await get_artifact_store()
 
     try:
+        # Verify ownership before moving
+        metadata: ArtifactMetadata = await store.metadata(artifact_id)
+        if metadata.scope == "user":
+            if not user_id or user_id != metadata.owner_id:
+                raise ValueError("Access denied: file belongs to different user")
+        elif metadata.scope == "session":
+            if session_id != metadata.session_id:
+                raise ValueError("Access denied: file belongs to different session")
+
         move_meta = {
             "moved_via": "mcp",
             "move_time": datetime.now().isoformat(),
@@ -685,6 +712,8 @@ async def move_file(
 
         return f"File moved successfully: {artifact_id} -> {new_filename}"
 
+    except ArtifactNotFoundError:
+        raise ValueError(f"File not found: {artifact_id}")
     except Exception as e:
         raise ValueError(f"Failed to move file: {str(e)}")
 
@@ -702,17 +731,28 @@ async def get_file_metadata(artifact_id: str) -> Dict[str, Any]:
     """
     _check_tool_enabled("get_file_metadata")
 
-    # Get session from context (NEVER from parameters!)
-    from chuk_mcp_runtime.session.native_session_management import require_session
+    # Get session and user from context (NEVER from parameters!)
+    from chuk_mcp_runtime.session.native_session_management import (
+        get_session_or_none,
+        get_user_or_none,
+    )
 
-    require_session()  # Validate session exists
+    user_id = get_user_or_none()
+    session_id = get_session_or_none()
 
     store = await get_artifact_store()
 
     try:
-        # Returns pydantic ArtifactMetadata model
         metadata: ArtifactMetadata = await store.metadata(artifact_id)
-        # Serialize pydantic model to dict for JSON response
+
+        # Access control: only the owner may inspect metadata
+        if metadata.scope == "user":
+            if not user_id or user_id != metadata.owner_id:
+                raise ValueError("Access denied: file belongs to different user")
+        elif metadata.scope == "session":
+            if not session_id or session_id != metadata.session_id:
+                raise ValueError("Access denied: file belongs to different session")
+
         return metadata.model_dump()
 
     except ArtifactNotFoundError:
@@ -735,14 +775,27 @@ async def get_presigned_url(artifact_id: str, expires_in: str = "medium") -> str
     """
     _check_tool_enabled("get_presigned_url")
 
-    # Get session from context (NEVER from parameters!)
-    from chuk_mcp_runtime.session.native_session_management import require_session
+    # Get session and user from context (NEVER from parameters!)
+    from chuk_mcp_runtime.session.native_session_management import (
+        get_session_or_none,
+        get_user_or_none,
+    )
 
-    require_session()  # Validate session exists
+    user_id = get_user_or_none()
+    session_id = get_session_or_none()
 
     store = await get_artifact_store()
 
     try:
+        # Access control: only the owner may generate a URL
+        metadata: ArtifactMetadata = await store.metadata(artifact_id)
+        if metadata.scope == "user":
+            if not user_id or user_id != metadata.owner_id:
+                raise ValueError("Access denied: file belongs to different user")
+        elif metadata.scope == "session":
+            if not session_id or session_id != metadata.session_id:
+                raise ValueError("Access denied: file belongs to different session")
+
         if expires_in == "short":
             url = await store.presign_short(artifact_id)
         elif expires_in == "long":

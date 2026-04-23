@@ -8,10 +8,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# Mock the problematic artifacts_tools module before ANY imports
+# Mock the problematic artifacts_tools module before ANY imports so that
+# 'import chuk_mcp_runtime.entry' doesn't trigger a real chuk_artifacts import.
+_original_artifacts_module = sys.modules.get("chuk_mcp_runtime.tools.artifacts_tools")
 mock_artifacts_tools = MagicMock()
-mock_artifacts_tools.validate_session_parameter = (
-    lambda session_id=None, operation="unknown": session_id or "test-session"
+mock_artifacts_tools.validate_session_parameter = lambda session_id=None, operation="unknown": (
+    session_id or "test-session"
 )
 sys.modules["chuk_mcp_runtime.tools.artifacts_tools"] = mock_artifacts_tools
 
@@ -19,10 +21,10 @@ sys.modules["chuk_mcp_runtime.tools.artifacts_tools"] = mock_artifacts_tools
 # Import the entry module
 import chuk_mcp_runtime.entry as entry
 from tests.conftest import (
+    AsyncMockHelper,
     DummyServerRegistry,
     MockMCPSessionManager,
     MockSessionContext,
-    TestAsyncMock,
     mock_get_session_or_none,
     mock_require_session,
     mock_with_session_auto_inject,
@@ -190,13 +192,13 @@ def patch_session_management():
     def mock_iter_tools(container):
         if isinstance(container, dict):
             for name, func in container.items():
-                mock_func = TestAsyncMock()
+                mock_func = AsyncMockHelper()
                 mock_func._mcp_tool = MagicMock()
                 mock_func._mcp_tool.name = name
                 yield name, mock_func
         elif isinstance(container, (list, tuple, set)):
             for name in container:
-                mock_func = TestAsyncMock()
+                mock_func = AsyncMockHelper()
                 mock_func._mcp_tool = MagicMock()
                 mock_func._mcp_tool.name = name
                 yield name, mock_func
@@ -206,13 +208,30 @@ def patch_session_management():
     # Mock get_artifact_tools
     def mock_get_artifact_tools():
         return {
-            "upload_file": TestAsyncMock(return_value="uploaded"),
-            "write_file": TestAsyncMock(return_value="written"),
-            "read_file": TestAsyncMock(return_value="content"),
-            "list_session_files": TestAsyncMock(return_value=[]),
+            "upload_file": AsyncMockHelper(return_value="uploaded"),
+            "write_file": AsyncMockHelper(return_value="written"),
+            "read_file": AsyncMockHelper(return_value="content"),
+            "list_session_files": AsyncMockHelper(return_value=[]),
         }
 
     entry.get_artifact_tools = mock_get_artifact_tools
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _restore_artifacts_module():
+    """Restore the real artifacts_tools module after this module's tests complete.
+
+    test_entry_basic replaces chuk_mcp_runtime.tools.artifacts_tools with a
+    MagicMock at import time so that 'import entry' doesn't trigger real
+    chuk_artifacts imports.  Without cleanup this MagicMock persists for the
+    entire pytest session, causing later tests that import the real module to
+    see MagicMock objects instead of real async functions.
+    """
+    yield
+    if _original_artifacts_module is not None:
+        sys.modules["chuk_mcp_runtime.tools.artifacts_tools"] = _original_artifacts_module
+    else:
+        sys.modules.pop("chuk_mcp_runtime.tools.artifacts_tools", None)
 
 
 # Tests
@@ -317,7 +336,7 @@ def test_tool_naming_compatibility():
     )
 
     # Add a tool function that returns a mock response
-    test_tool = TestAsyncMock(return_value="Tool response")
+    test_tool = AsyncMockHelper(return_value="Tool response")
     proxy_mgr.tools = {"proxy.test.tool": test_tool}
 
     # Test get_all_tools (async function)

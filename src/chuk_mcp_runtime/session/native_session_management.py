@@ -66,6 +66,7 @@ class MCPSessionManager:
         self.default_ttl_hours = default_ttl_hours
         self.auto_extend_threshold = auto_extend_threshold
         self._last_session: Optional[str] = None  # Track last used session for auto-reuse
+        self._last_session_user: Optional[str] = None  # Track which user owns _last_session
 
         # Create the underlying SessionManager
         self._session_manager = SessionManager(
@@ -181,11 +182,13 @@ class MCPSessionManager:
             self._last_session = current
             return current
 
-        # Try to reuse last session if still valid (for stdio requests without context vars)
+        # Try to reuse last session if still valid (for stdio requests without context vars).
+        # Never reuse across users: a session owned by user A must not be given to user B.
         if self._last_session and await self.validate_session(self._last_session):
-            logger.debug(f"Reusing last session {self._last_session}")
-            self.set_current_session(self._last_session, user_id)
-            return self._last_session
+            if user_id is None or user_id == self._last_session_user:
+                logger.debug(f"Reusing last session {self._last_session}")
+                self.set_current_session(self._last_session, user_id)
+                return self._last_session
 
         # Create new session
         session_id = await self.create_session(
@@ -199,6 +202,7 @@ class MCPSessionManager:
 
         self.set_current_session(session_id, user_id)
         self._last_session = session_id
+        self._last_session_user = user_id
         logger.debug(f"Auto-created session {session_id} for user {user_id}")
         return session_id
 
@@ -349,6 +353,16 @@ def get_session_or_none() -> Optional[str]:
 def get_user_or_none() -> Optional[str]:
     """Get current user or None."""
     return _user_ctx.get()
+
+
+def set_user_context(user_id: Optional[str]) -> Any:
+    """Set the user context. Returns a ContextVar token for later reset."""
+    return _user_ctx.set(user_id)
+
+
+def reset_user_context(token: Any) -> None:
+    """Reset the user context to its previous value using the token from set_user_context."""
+    _user_ctx.reset(token)
 
 
 def _is_proxy_tool(func: Any) -> bool:
