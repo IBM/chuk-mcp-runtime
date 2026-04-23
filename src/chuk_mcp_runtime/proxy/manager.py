@@ -54,6 +54,11 @@ class ProxyServerManager:
     """Spin up MCP side-cars and expose their tools locally."""
 
     def __init__(self, cfg: Dict[str, Any], project_root: str):
+        # Accept either a plain dict or a RuntimeConfig (Pydantic model).
+        # entry.py already calls cfg.to_dict(), but examples often pass the
+        # RuntimeConfig directly, so normalise here for convenience.
+        if hasattr(cfg, "to_dict"):
+            cfg = cfg.to_dict()
         pxy = cfg.get("proxy", {})
         self.enabled = pxy.get("enabled", False)
         self.ns_root = pxy.get("namespace", "proxy")

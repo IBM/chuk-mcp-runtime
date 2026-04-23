@@ -173,7 +173,17 @@ class OpenAIToolsAdapter:
             registry = await ToolRegistryProvider.get_registry()
             tools_list = await registry.list_tools()
 
-            for namespace, name in tools_list:
+            for tool_info in tools_list:
+                # ToolInfo is a Pydantic model — access fields by attribute.
+                # Guard against both Pydantic models and legacy (namespace, name) tuples.
+                if hasattr(tool_info, "namespace") and hasattr(tool_info, "name"):
+                    namespace = tool_info.namespace
+                    name = tool_info.name
+                else:
+                    try:
+                        namespace, name = tool_info
+                    except (TypeError, ValueError):
+                        continue
                 # Skip tools that are already proxied
                 if namespace.startswith("proxy.") and "." in namespace:
                     continue
