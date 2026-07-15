@@ -124,7 +124,11 @@ async def run_runtime_async(
             if iscoroutinefunction(initialize_openai_compatibility):
                 await initialize_openai_compatibility()
             else:
-                initialize_openai_compatibility()
+                # initialize_openai_compatibility is declared async, but
+                # tests may monkeypatch it with a sync mock, so the runtime
+                # check above is load-bearing even though mypy sees this
+                # branch as statically unreachable.
+                initialize_openai_compatibility()  # type: ignore[unused-coroutine]
     except Exception as exc:
         logger.warning("OpenAI-compat init failed: %s", exc)
 

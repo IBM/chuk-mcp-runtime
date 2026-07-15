@@ -321,9 +321,11 @@ class OpenAIToolsAdapter:
 
         # Handle both function and class-based tools
         if inspect.isclass(fn):
-            # Create an instance and call execute
+            # Create an instance and call execute. Class-based tools are
+            # duck-typed to expose execute(); isclass() narrows fn to
+            # type[object] so mypy can't see that attribute statically.
             instance = fn()
-            result = instance.execute(**kw)
+            result = instance.execute(**kw)  # type: ignore[attr-defined]
             if inspect.isawaitable(result):
                 result = await result
             return result
