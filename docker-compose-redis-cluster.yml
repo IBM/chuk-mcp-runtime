@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   redis-node-1:
-    image: redis:7-alpine
+    image: redis:8-alpine
     command: redis-server --port 7001 --cluster-enabled yes --cluster-config-file nodes.conf --cluster-node-timeout 5000 --appendonly yes
     ports:
       - "7001:7001"
@@ -10,7 +10,7 @@ services:
       - redis-node-1-data:/data
 
   redis-node-2:
-    image: redis:7-alpine
+    image: redis:8-alpine
     command: redis-server --port 7002 --cluster-enabled yes --cluster-config-file nodes.conf --cluster-node-timeout 5000 --appendonly yes
     ports:
       - "7002:7002"
@@ -18,7 +18,7 @@ services:
       - redis-node-2-data:/data
 
   redis-node-3:
-    image: redis:7-alpine
+    image: redis:8-alpine
     command: redis-server --port 7003 --cluster-enabled yes --cluster-config-file nodes.conf --cluster-node-timeout 5000 --appendonly yes
     ports:
       - "7003:7003"
@@ -26,7 +26,7 @@ services:
       - redis-node-3-data:/data
 
   redis-cluster-init:
-    image: redis:7-alpine
+    image: redis:8-alpine
     depends_on:
       - redis-node-1
       - redis-node-2
