@@ -626,11 +626,11 @@ requires-dist = [
     { name = "bandit", marker = "extra == 'dev'", specifier = ">=1.7.0" },
     { name = "chuk-artifacts", specifier = ">=0.11.1" },
     { name = "chuk-sessions", specifier = ">=0.6.1" },
-    { name = "cryptography", specifier = ">=46.0.6" },
+    { name = "cryptography", specifier = ">=50.0.1" },
     { name = "mcp", specifier = ">=1.26.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.13.0" },
     { name = "pydantic", specifier = ">=2.10.6" },
-    { name = "pyjwt", specifier = ">=2.12.0" },
+    { name = "pyjwt", specifier = ">=2.15.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.5" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6.0.0" },
@@ -1693,7 +1693,6 @@ wheels = [
 
 [[package]]
 name = "pyjwt"
-
 version = "2.15.1"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/43/ea/5194e52748b0da83d71e082d75496eaec6e58f419f5e184786ded517e6a9/pyjwt-2.15.1.tar.gz", hash = "sha256:4f259e80cdfb6b3fc18a7de51fd1ef9ec79652f25019bae68975ca2468a34df8", size = 121252, upload-time = "2026-09-28T18:40:42.598Z" }
