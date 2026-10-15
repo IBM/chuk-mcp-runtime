@@ -168,9 +168,9 @@ async def test_create_openai_compatible_wrapper(clear_tools_registry):
     assert wrapper._mcp_tool.description == "Get weather forecast"
 
     # Check that the schema was preserved
-    assert "properties" in wrapper._mcp_tool.inputSchema
-    assert "location" in wrapper._mcp_tool.inputSchema["properties"]
-    assert "days" in wrapper._mcp_tool.inputSchema["properties"]
+    assert "properties" in wrapper._mcp_tool.input_schema
+    assert "location" in wrapper._mcp_tool.input_schema["properties"]
+    assert "days" in wrapper._mcp_tool.input_schema["properties"]
 
     # Test calling the wrapper
     result = await wrapper(location="London", days=5)
@@ -208,9 +208,9 @@ async def test_create_openai_compatible_wrapper_with_proxy_metadata(
     assert wrapper._mcp_tool.description == "Proxy function description"
 
     # Check that the schema was preserved
-    assert "properties" in wrapper._mcp_tool.inputSchema
-    assert "query" in wrapper._mcp_tool.inputSchema["properties"]
-    assert "limit" in wrapper._mcp_tool.inputSchema["properties"]
+    assert "properties" in wrapper._mcp_tool.input_schema
+    assert "query" in wrapper._mcp_tool.input_schema["properties"]
+    assert "limit" in wrapper._mcp_tool.input_schema["properties"]
 
     # Test calling the wrapper
     result = await wrapper(query="test", limit=10)

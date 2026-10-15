@@ -11,6 +11,8 @@ from __future__ import annotations
 from contextvars import ContextVar
 from typing import Any, Optional
 
+from mcp.types.version import MODERN_PROTOCOL_VERSIONS
+
 from chuk_mcp_runtime.server.logging_config import get_logger
 
 logger = get_logger("chuk_mcp_runtime.request_context")
@@ -94,17 +96,24 @@ class MCPRequestContext:
             logger.warning("No session available for progress notifications")
             return
 
-        if not self.progress_token:
+        # Protocol 2026-07-28 has no standalone stream: progress must ride the response
+        # of the current request (report_progress is request-scoped, no-op without a token)
+        modern = getattr(self.session, "protocol_version", None) in MODERN_PROTOCOL_VERSIONS
+
+        if not modern and not self.progress_token:
             logger.debug("No progress token provided by client, skipping notification")
             return
 
         try:
-            await self.session.send_progress_notification(
-                progress_token=self.progress_token,
-                progress=progress,
-                total=total,
-                message=message,
-            )
+            if modern:
+                await self.session.report_progress(progress, total, message)
+            else:
+                await self.session.send_progress_notification(
+                    progress_token=self.progress_token,
+                    progress=progress,
+                    total=total,
+                    message=message,
+                )
             logger.debug(f"Sent progress: {progress}/{total or '?'} - {message or 'no message'}")
         except Exception as e:
             logger.error(f"Failed to send progress notification: {e}")

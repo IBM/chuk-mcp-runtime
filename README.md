@@ -140,6 +140,7 @@ uv pip install tzdata
 
 ## Table of Contents
 
+- [What's New in v0.12.0](#whats-new-in-v0120)
 - [What's New in v0.10.4](#whats-new-in-v0104)
 - [What's New in v0.9.0](#whats-new-in-v090)
 - [Redis Cluster Support](#redis-cluster-support-new-in-v0104)
@@ -155,6 +156,34 @@ uv pip install tzdata
 - [Environment Variables](#environment-variables)
 - [Development](#development)
 - [Troubleshooting](#troubleshooting)
+
+## What's New in v0.12.0
+
+### mcp 2.x
+
+The runtime now runs on **mcp 2.x** (`mcp>=2.3.0,<3`); mcp 1.x is no longer supported as a dependency. Clients that use mcp 1.x keep working, since mcp 2 still speaks the older protocol versions.
+
+#### Upgrading servers built on the runtime
+
+- Lift any `mcp<2` pin, and pin the runtime to `chuk-mcp-runtime>=0.12,<0.13`.
+- mcp 2 no longer installs `httpx` (it uses `httpx2`). If your server imports `httpx`, declare it as a dependency or switch to `httpx2`.
+- `McpError(ErrorData(...))` is now `MCPError(code, message)` (`from mcp.shared.exceptions import MCPError`).
+- `mcp.types` objects use snake_case attributes, e.g. `.input_schema`, `.mime_type`, `.is_error`.
+- `get_request_context().meta` is now a dict (`meta["progress_token"]`), and `.session` is an mcp 2 `ServerSession`.
+
+#### Transport limits
+
+mcp 2 adds limits to the HTTP transports. The runtime sets its own defaults, configurable in the `sse` and `streamable-http` sections (see [Configuration Reference](#configuration-reference)):
+
+| Setting | Runtime default | mcp 2 default |
+|---|---|---|
+| `max_request_body_size` | 50 MiB (`null` = no limit) | 4 MiB |
+| `session_idle_timeout` (`stateless: false` only) | never | 30 min |
+| `max_sessions` (`stateless: false` only) | no limit | 10,000 |
+
+50 MiB leaves room for tool arguments that carry base64 files or images.
+
+With `stateless: false` and `json_response: true`, clients on protocol 2026-07-28 get no progress notifications, because a JSON response can't carry them. Use `json_response: false` if that matters.
 
 ## What's New in v0.10.4
 
@@ -487,6 +516,7 @@ sse:
   sse_path: "/sse"                 # SSE endpoint path
   message_path: "/messages/"       # Message submission path
   health_path: "/health"           # Health check path
+  max_request_body_size: 52428800  # Max POST body in bytes (default 50 MiB; null = no limit)
 
 # HTTP-specific settings (when type: "streamable-http")
 streamable-http:
@@ -495,6 +525,9 @@ streamable-http:
   mcp_path: "/mcp"                 # MCP endpoint path
   json_response: true              # Enable JSON responses
   stateless: true                  # Stateless mode
+  max_request_body_size: 52428800  # Max request body in bytes (default 50 MiB; null = no limit)
+  session_idle_timeout: null       # stateless: false only - close sessions idle for N seconds (default: never)
+  max_sessions: null               # stateless: false only - max concurrent sessions (default: no limit)
 
 # ============================================
 # LOGGING CONFIGURATION

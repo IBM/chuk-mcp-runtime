@@ -98,6 +98,10 @@ class ServerConfig(BaseModel):
     auth: Optional[AuthType] = Field(default=None, description="Authentication type")
 
 
+# Large enough for tool arguments carrying base64 files or images; None disables the limit
+DEFAULT_MAX_REQUEST_BODY_SIZE = 50 * 1024 * 1024
+
+
 class SSEConfig(BaseModel):
     """SSE transport configuration."""
 
@@ -110,6 +114,11 @@ class SSEConfig(BaseModel):
     health_path: str = Field(default="/health", description="Health check path")
     log_level: Optional[str] = Field(default=None, description="Server-specific log level")
     access_log: bool = Field(default=False, description="Enable access logging")
+    max_request_body_size: Optional[int] = Field(
+        default=DEFAULT_MAX_REQUEST_BODY_SIZE,
+        description="Max POST body in bytes (None = no limit)",
+        gt=0,
+    )
 
 
 class StreamableHTTPConfig(BaseModel):
@@ -125,6 +134,18 @@ class StreamableHTTPConfig(BaseModel):
     health_path: Optional[str] = Field(default=None, description="Health check path")
     log_level: Optional[str] = Field(default=None, description="Server-specific log level")
     access_log: bool = Field(default=False, description="Enable access logging")
+    max_request_body_size: Optional[int] = Field(
+        default=DEFAULT_MAX_REQUEST_BODY_SIZE,
+        description="Max request body in bytes (None = no limit)",
+        gt=0,
+    )
+    # Stateful sessions only (stateless: false); None keeps mcp 1.x behaviour
+    session_idle_timeout: Optional[float] = Field(
+        default=None, description="Close stateful sessions idle for this many seconds", gt=0
+    )
+    max_sessions: Optional[int] = Field(
+        default=None, description="Max concurrent stateful sessions (None = no limit)", gt=0
+    )
 
 
 class ToolsConfig(BaseModel):

@@ -8,6 +8,7 @@ import json
 from contextlib import asynccontextmanager
 
 import pytest
+from mcp.types import CallToolRequestParams
 
 from chuk_mcp_runtime.common.mcp_tool_decorator import TOOLS_REGISTRY, mcp_tool
 from chuk_mcp_runtime.server.server import MCPServer
@@ -17,38 +18,23 @@ _created_servers = []
 
 
 class FakeServer:
-    def __init__(self, name):
+    """Captures the mcp 2 on_* handlers; exposes call_tool in the old (name, arguments) style."""
+
+    def __init__(self, name, **handlers):
         _created_servers.append(self)
-        self.handlers = {}
         self.server_name = name
+        self.raw_handlers = handlers
+        self.handlers = {}
+        on_call_tool = handlers.get("on_call_tool")
+        if on_call_tool:
 
-    def list_tools(self):
-        def decorator(fn):
-            self.handlers["list_tools"] = fn
-            return fn
+            async def call_tool(name, arguments):
+                result = await on_call_tool(
+                    None, CallToolRequestParams(name=name, arguments=arguments)
+                )
+                return result.content
 
-        return decorator
-
-    def call_tool(self):
-        def decorator(fn):
-            self.handlers["call_tool"] = fn
-            return fn
-
-        return decorator
-
-    def list_resources(self):
-        def decorator(fn):
-            self.handlers["list_resources"] = fn
-            return fn
-
-        return decorator
-
-    def read_resource(self):
-        def decorator(fn):
-            self.handlers["read_resource"] = fn
-            return fn
-
-        return decorator
+            self.handlers["call_tool"] = call_tool
 
     def create_initialization_options(self):
         return {}

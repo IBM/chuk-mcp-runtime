@@ -14,14 +14,18 @@ CHUK MCP Server
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import importlib
 import inspect
 import json
 import os
 import re
+import sys
 import time
 from http.cookies import SimpleCookie
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as package_version
 from inspect import (
     isasyncgen,
     isasyncgenfunction,
@@ -29,6 +33,7 @@ from inspect import (
 )
 from typing import Any, AsyncIterator, Callable, List, Optional, Union
 
+import jsonschema
 import uvicorn
 
 # ─────────────────────────── chuk_artifacts integration ──────────────────────
@@ -37,13 +42,27 @@ from mcp.server import Server
 from mcp.server.sse import SseServerTransport
 from mcp.server.stdio import stdio_server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+from mcp.shared.exceptions import MCPError
 from mcp.types import (
+    INTERNAL_ERROR,
+    INVALID_PARAMS,
+    BlobResourceContents,
+    CallToolRequestParams,
+    CallToolResult,
     EmbeddedResource,
     ImageContent,
+    ListResourcesResult,
+    ListToolsResult,
+    PaginatedRequestParams,
+    ReadResourceRequestParams,
+    ReadResourceResult,
     Resource,
     TextContent,
+    TextResourceContents,
     Tool,
 )
+from mcp.types import methods as mcp_methods
+from pydantic import ValidationError
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
 from starlette.middleware import Middleware
@@ -152,6 +171,38 @@ def _extract_user_id(payload: dict) -> Optional[str]:
     return (
         payload.get("sub") or payload.get("user_id") or payload.get("uid") or payload.get("id")
     ) or None
+
+
+def _with_request_identity(app: ASGIApp) -> ASGIApp:
+    """Run ``app`` with the request's headers and authenticated user in context.
+
+    mcp 2 handles each SSE message in the context of the POST that carried it
+    (mcp 1 used the GET stream's context), so tools see the identity set here.
+    """
+
+    async def wrapped(scope: Scope, receive: Receive, send: Send) -> None:
+        set_request_headers(scope.get("headers_dict", {}))
+        user_id = _extract_user_id(scope.get("user", {}))
+        user_token = set_user_context(user_id) if user_id else None
+        try:
+            await app(scope, receive, send)
+        finally:
+            if user_token is not None:
+                reset_user_context(user_token)
+
+    return wrapped
+
+
+def _body_limit(configured: Optional[int]) -> int:
+    """mcp 2 requires a positive request body limit; a configured None means no limit."""
+    return configured if configured is not None else sys.maxsize
+
+
+def _runtime_version() -> str:
+    try:
+        return package_version("chuk-mcp-runtime")
+    except PackageNotFoundError:
+        return ""
 
 
 # ------------------------------------------------------------------------------
@@ -394,10 +445,7 @@ class MCPServer:
         await initialize_resource_registry()
         update_naming_maps()
 
-        server = Server(self.server_name)
-
         # ----------------------------- list_tools ----------------------------- #
-        @server.list_tools()
         async def list_tools() -> List[Tool]:
             """List available tools with robust error handling."""
             try:
@@ -434,9 +482,8 @@ class MCPServer:
                 return []
 
         # ----------------------------- call_tool ----------------------------- #
-        @server.call_tool()
         async def call_tool(
-            name: str, arguments: dict[str, Any]
+            name: str, arguments: dict[str, Any], mcp_ctx: Any = None
         ) -> List[Union[TextContent, ImageContent, EmbeddedResource]]:
             """Execute a tool with native session management."""
             try:
@@ -473,15 +520,14 @@ class MCPServer:
                 func = self.tools_registry[resolved]
                 self.logger.debug("Resolved tool '%s' to function: %s", name, func)
 
-                # Capture MCP request context for progress notifications
-                mcp_ctx = getattr(server, "request_context", None)
+                # MCP request context (passed in by the handler) for progress notifications
                 progress_token = None
                 mcp_session = None
 
                 if mcp_ctx:
-                    # Extract progress token from request metadata
+                    # Extract progress token from request metadata (a dict in mcp 2)
                     if hasattr(mcp_ctx, "meta") and mcp_ctx.meta:
-                        progress_token = getattr(mcp_ctx.meta, "progressToken", None)
+                        progress_token = mcp_ctx.meta.get("progress_token")
                     # Get the MCP session
                     mcp_session = getattr(mcp_ctx, "session", None)
 
@@ -613,7 +659,6 @@ class MCPServer:
                 return [TextContent(type="text", text=f"Tool execution error: {str(e)}")]
 
         # ----------------------------- list_resources ----------------------------- #
-        @server.list_resources()
         async def list_resources() -> List[Resource]:
             """
             List all available resources:
@@ -651,7 +696,7 @@ class MCPServer:
                                     uri=uri,
                                     name=f.get("filename", "unknown"),
                                     description=f.get("summary", ""),
-                                    mimeType=f.get("mime", "application/octet-stream"),
+                                    mime_type=f.get("mime", "application/octet-stream"),
                                 )
                             )
 
@@ -672,7 +717,6 @@ class MCPServer:
             return all_resources
 
         # ----------------------------- read_resource ----------------------------- #
-        @server.read_resource()
         async def read_resource(uri: str):
             """
             Read resource content from custom resources or artifacts.
@@ -697,7 +741,7 @@ class MCPServer:
 
                     # Get MIME type from metadata
                     mime_type = getattr(resource_func, "_mcp_resource", None)
-                    mime = mime_type.mimeType if mime_type else "text/plain"
+                    mime = mime_type.mime_type if mime_type else "text/plain"
 
                     # SDK accepts: str | bytes | Iterable[ReadResourceContents]
                     # Return raw string/bytes for simple cases
@@ -764,6 +808,99 @@ class MCPServer:
             raise ValueError(f"Resource not found: {uri}")
 
         # ------------------------------------------------------------------ #
+        # mcp 2 handlers: (ctx, params) in, result models out               #
+        # ------------------------------------------------------------------ #
+        def listed_tools() -> dict[str, Tool]:
+            """Registered tools by name: what list_tools() returns, without its logging."""
+            listed: dict[str, Tool] = {}
+            for func in self.tools_registry.values():
+                tool = getattr(func, "_mcp_tool", None)
+                if tool is not None and hasattr(tool, "name") and hasattr(tool, "description"):
+                    listed[tool.name] = tool
+            return listed
+
+        def tool_input_schema(name: str) -> Optional[dict[str, Any]]:
+            tool = listed_tools().get(name)
+            return tool.input_schema if tool is not None else None
+
+        def tool_error(text: str) -> CallToolResult:
+            return CallToolResult(content=[TextContent(type="text", text=text)], is_error=True)
+
+        async def on_list_tools(
+            ctx: Any, params: Optional[PaginatedRequestParams]
+        ) -> ListToolsResult:
+            # mcp 2 checks the result against the negotiated protocol's wire schema, so one
+            # tool with a non-conforming input schema would fail the whole list: skip it.
+            version = getattr(ctx, "protocol_version", None)
+            tools = []
+            for tool in await list_tools():
+                if version:
+                    dumped = ListToolsResult(tools=[tool]).model_dump(
+                        by_alias=True, mode="json", exclude_none=True
+                    )
+                    try:
+                        mcp_methods.serialize_server_result("tools/list", version, dumped)
+                    except ValidationError as e:
+                        self.logger.error("Not listing tool %s, invalid schema: %s", tool.name, e)
+                        continue
+                    except ValueError:
+                        pass  # protocol version without a wire schema here: nothing to check
+                tools.append(tool)
+            return ListToolsResult(tools=tools)
+
+        async def on_call_tool(ctx: Any, params: CallToolRequestParams) -> CallToolResult:
+            arguments = params.arguments or {}
+
+            # Input validation against the listed schema, as mcp 1.x did. Like mcp 1.x, a
+            # broken schema is an error result too, not a protocol error.
+            try:
+                tool = listed_tools().get(params.name)
+                if tool is not None:
+                    jsonschema.validate(instance=arguments, schema=tool.input_schema)
+            except jsonschema.ValidationError as e:
+                return tool_error(f"Input validation error: {e.message}")
+            except Exception as e:
+                return tool_error(str(e))
+
+            return CallToolResult(content=await call_tool(params.name, arguments, ctx))
+
+        async def on_list_resources(
+            ctx: Any, params: Optional[PaginatedRequestParams]
+        ) -> ListResourcesResult:
+            return ListResourcesResult(resources=await list_resources())
+
+        async def on_read_resource(
+            ctx: Any, params: ReadResourceRequestParams
+        ) -> ReadResourceResult:
+            try:
+                data = await read_resource(params.uri)
+            except ValueError as e:
+                # Keep the message on every protocol version (mcp 2 reports unexpected
+                # exceptions as a bare "Internal server error"); codes as in mcp's MCPServer
+                code = INVALID_PARAMS if str(e).startswith("Resource not found") else INTERNAL_ERROR
+                raise MCPError(code=code, message=str(e), data={"uri": params.uri}) from e
+            contents: Union[TextResourceContents, BlobResourceContents]
+            if isinstance(data, bytes):
+                contents = BlobResourceContents(
+                    uri=params.uri,
+                    blob=base64.b64encode(data).decode(),
+                    mime_type="application/octet-stream",
+                )
+            else:
+                contents = TextResourceContents(uri=params.uri, text=data, mime_type="text/plain")
+            return ReadResourceResult(contents=[contents])
+
+        server = Server(
+            self.server_name,
+            version=_runtime_version(),
+            get_tool_input_schema=tool_input_schema,
+            on_list_tools=on_list_tools,
+            on_call_tool=on_call_tool,
+            on_list_resources=on_list_resources,
+            on_read_resource=on_read_resource,
+        )
+
+        # ------------------------------------------------------------------ #
         # Transport bootstrapping (stdio / SSE / StreamableHTTP)            #
         # ------------------------------------------------------------------ #
         opts = server.create_initialization_options()
@@ -782,7 +919,9 @@ class MCPServer:
                 cfg.message_path,
                 cfg.health_path,
             )
-            transport = SseServerTransport(msg_path)
+            transport = SseServerTransport(
+                msg_path, max_request_body_size=_body_limit(cfg.max_request_body_size)
+            )
 
             async def _handle_sse(request: Request):
                 # Extract and store headers for tools to access
@@ -819,7 +958,7 @@ class MCPServer:
             app = Starlette(
                 routes=[
                     Route(sse_path, _handle_sse, methods=["GET"]),
-                    Mount(msg_path, app=transport.handle_post_message),
+                    Mount(msg_path, app=_with_request_identity(transport.handle_post_message)),
                     Route(health_path, health, methods=["GET"]),
                 ],
                 middleware=[
@@ -859,6 +998,11 @@ class MCPServer:
                 event_store=event_store,
                 stateless=stateless,
                 json_response=json_response,
+                # Body limit defaults to 50 MiB (mcp 2: 4 MiB); idle timeout and session cap
+                # default to None (mcp 1.x behaviour) instead of mcp 2's 30 min / 10,000
+                max_request_body_size=_body_limit(http_cfg.max_request_body_size),
+                session_idle_timeout=http_cfg.session_idle_timeout,
+                max_sessions=http_cfg.max_sessions,
             )
 
             async def handle_streamable_http(

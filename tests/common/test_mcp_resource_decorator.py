@@ -51,7 +51,7 @@ def test_mcp_resource_with_metadata():
     assert str(resource.uri) == "config://app"
     assert resource.name == "App Config"
     assert resource.description == "Application configuration"
-    assert resource.mimeType == "application/json"
+    assert resource.mime_type == "application/json"
 
 
 def test_mcp_resource_sync_function():
@@ -205,7 +205,7 @@ def test_resource_metadata_preservation():
     assert func._resource_uri == "preserve://test"
     assert func._mcp_resource.name == "Preserve Test"
     assert func._mcp_resource.description == "Testing metadata preservation"
-    assert func._mcp_resource.mimeType == "text/custom"
+    assert func._mcp_resource.mime_type == "text/custom"
 
 
 def test_resource_binary_content():

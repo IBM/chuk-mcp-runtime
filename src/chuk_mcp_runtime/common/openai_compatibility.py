@@ -98,18 +98,23 @@ async def create_openai_compatible_wrapper(
         description = meta_dict.get("description", "")
     elif hasattr(original_func, "_mcp_tool"):
         m = original_func._mcp_tool  # type: ignore[attr-defined]
-        schema = copy.deepcopy(getattr(m, "inputSchema", {}))
+        schema = copy.deepcopy(getattr(m, "input_schema", {}))
         description = getattr(m, "description", "")
     else:
         logger.warning("No schema for %s - skipping OpenAI wrapper", original_name)
         return None
 
     if "properties" not in schema and isinstance(schema, dict):
-        schema = {
-            "type": "object",
-            "properties": schema,
-            "required": schema.get("required", []),
-        }
+        if "type" in schema:
+            # An object schema without arguments, e.g. {"type": "object"}
+            schema = {**schema, "properties": {}}
+        else:
+            # A bare map of properties, optionally with a "required" list
+            schema = {
+                "type": "object",
+                "properties": {k: v for k, v in schema.items() if k != "required"},
+                "required": schema.get("required", []),
+            }
 
     # Strip leading "proxy." if present to avoid redundant prefix
     clean_name = original_name.replace("proxy.", "", 1)
@@ -121,7 +126,7 @@ async def create_openai_compatible_wrapper(
     alias_meta = Tool(
         name=alias_name,
         description=description.strip().replace("\n", " "),
-        inputSchema=schema,
+        input_schema=schema,
     )
     alias_fn._mcp_tool = alias_meta  # type: ignore[attr-defined]
 
@@ -223,7 +228,7 @@ class OpenAIToolsAdapter:
                         tool_meta = Tool(
                             name=openai_name,
                             description=description.strip().replace("\n", " "),
-                            inputSchema=input_schema,
+                            input_schema=input_schema,
                         )
 
                         # Attach metadata
@@ -283,7 +288,7 @@ class OpenAIToolsAdapter:
             # For ties, prioritize tools with "time_" prefix over "default_proxy_" prefix
             def sort_key(tool_tuple):
                 name, fn = tool_tuple
-                prop_count = len(fn._mcp_tool.inputSchema.get("properties", {}))
+                prop_count = len(fn._mcp_tool.input_schema.get("properties", {}))
                 # Prioritize server-specific tools (like time_*) over proxy tools
                 prefix_priority = 0
                 if name.startswith("default_proxy_"):
@@ -305,7 +310,7 @@ class OpenAIToolsAdapter:
                         "function": {
                             "name": name,
                             "description": meta.description,
-                            "parameters": meta.inputSchema,
+                            "parameters": meta.input_schema,
                         },
                     }
                 )

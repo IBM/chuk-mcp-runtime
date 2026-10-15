@@ -43,10 +43,10 @@ try:
 except ImportError:
 
     class Tool:
-        def __init__(self, name: str, description: str, inputSchema: Dict[str, Any]):
+        def __init__(self, name: str, description: str, input_schema: Dict[str, Any]):
             self.name = name
             self.description = description
-            self.inputSchema = inputSchema
+            self.input_schema = input_schema
 
 
 # Global registry of tool functions (always async)
@@ -279,7 +279,7 @@ async def _initialize_tool(tool_name: str, placeholder: Callable[..., Any]):
         tool_obj = Tool(
             name=placeholder._init_name,
             description=placeholder._init_desc,
-            inputSchema=schema,
+            input_schema=schema,
         )
 
         # Create final wrapper based on original function type
@@ -436,7 +436,7 @@ async def get_tool_metadata(tool_name: Optional[str] = None) -> Dict[str, Any]:
             metadata = {
                 "name": func._mcp_tool.name,
                 "description": func._mcp_tool.description,
-                "inputSchema": func._mcp_tool.inputSchema,
+                "inputSchema": func._mcp_tool.input_schema,
             }
             # Add timeout info if available
             if hasattr(func, "_tool_timeout") and func._tool_timeout is not None:
@@ -453,7 +453,7 @@ async def get_tool_metadata(tool_name: Optional[str] = None) -> Dict[str, Any]:
                 metadata = {
                     "name": func._mcp_tool.name,
                     "description": func._mcp_tool.description,
-                    "inputSchema": func._mcp_tool.inputSchema,
+                    "inputSchema": func._mcp_tool.input_schema,
                 }
                 # Add timeout info if available
                 if hasattr(func, "_tool_timeout") and func._tool_timeout is not None:

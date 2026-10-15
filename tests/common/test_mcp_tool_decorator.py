@@ -138,11 +138,11 @@ def test_tool_decorator():
     assert TOOLS_REGISTRY["add_numbers"] is add_numbers
 
     # Check schema
-    assert "properties" in tool.inputSchema
-    assert "x" in tool.inputSchema["properties"]
-    assert "y" in tool.inputSchema["properties"]
-    assert tool.inputSchema["properties"]["x"]["type"] == "integer"
-    assert tool.inputSchema["properties"]["y"]["type"] == "integer"
+    assert "properties" in tool.input_schema
+    assert "x" in tool.input_schema["properties"]
+    assert "y" in tool.input_schema["properties"]
+    assert tool.input_schema["properties"]["x"]["type"] == "integer"
+    assert tool.input_schema["properties"]["y"]["type"] == "integer"
 
 
 def test_dot_notation_tool():

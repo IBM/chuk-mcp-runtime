@@ -73,15 +73,15 @@ def mcp_resource(
                 )
 
         # Create Resource metadata object
-        # Convert uri string to AnyUrl for type safety
+        # Validate the uri as a URL; mcp 2 stores Resource.uri as a plain string
         url_adapter: TypeAdapter[AnyUrl] = TypeAdapter(AnyUrl)
-        resource_uri = url_adapter.validate_python(uri)
+        url_adapter.validate_python(uri)
 
         resource_metadata = Resource(
-            uri=resource_uri,
+            uri=uri,
             name=name,
             description=description or "",
-            mimeType=mime_type or "text/plain",
+            mime_type=mime_type or "text/plain",
         )
 
         # Attach metadata to function
