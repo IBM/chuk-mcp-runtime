@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.15' and sys_platform == 'win32'",
@@ -586,7 +586,7 @@ wheels = [
 
 [[package]]
 name = "chuk-mcp-runtime"
-version = "0.12.0a0"
+version = "0.12.0a2"
 source = { editable = "." }
 dependencies = [
     { name = "chuk-artifacts" },

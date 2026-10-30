@@ -10,17 +10,14 @@ cause a TypeError crash at runtime.
 from __future__ import annotations
 
 import importlib
-import inspect
 from contextlib import contextmanager
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 class _StandardTracer:
     """Mimics a fully-compliant OTel tracer (accepts 'context')."""
@@ -65,6 +62,7 @@ def _reload_entry_with_tracer(tracer):
     mcp_otel._tracer = tracer
     try:
         import chuk_mcp_runtime.entry as entry_mod
+
         importlib.reload(entry_mod)
         return entry_mod, mcp_otel
     finally:
@@ -75,8 +73,8 @@ def _reload_entry_with_tracer(tracer):
 # Tests
 # ---------------------------------------------------------------------------
 
-class TestPatchMcpOtelCompatibility:
 
+class TestPatchMcpOtelCompatibility:
     def test_no_op_for_standard_tracer(self):
         """Patch must NOT replace otel_span when tracer already accepts context."""
         import mcp.shared._otel as mcp_otel
@@ -85,6 +83,7 @@ class TestPatchMcpOtelCompatibility:
         mcp_otel._tracer = _StandardTracer()
         try:
             import chuk_mcp_runtime.entry as entry_mod
+
             entry_mod._patch_mcp_otel_compatibility()
             # Should still be the original function, not replaced
             assert mcp_otel.otel_span is original_otel_span
@@ -100,6 +99,7 @@ class TestPatchMcpOtelCompatibility:
         mcp_otel._tracer = _InstanaTracer()
         try:
             import chuk_mcp_runtime.entry as entry_mod
+
             entry_mod._patch_mcp_otel_compatibility()
             assert mcp_otel.otel_span is not original_otel_span, (
                 "otel_span should have been replaced with the shim"
@@ -118,6 +118,7 @@ class TestPatchMcpOtelCompatibility:
         mcp_otel._tracer = _InstanaTracer()
         try:
             import chuk_mcp_runtime.entry as entry_mod
+
             entry_mod._patch_mcp_otel_compatibility()
 
             # Simulate what mcp internals do: call otel_span with context=...
@@ -141,11 +142,24 @@ class TestPatchMcpOtelCompatibility:
 
         class _CapturingTracer:
             @contextmanager
-            def start_as_current_span(self, name, *, kind=None, attributes=None,
-                                       record_exception=True, set_status_on_exception=True):
-                captured.update(dict(name=name, kind=kind, attributes=attributes,
-                                     record_exception=record_exception,
-                                     set_status_on_exception=set_status_on_exception))
+            def start_as_current_span(
+                self,
+                name,
+                *,
+                kind=None,
+                attributes=None,
+                record_exception=True,
+                set_status_on_exception=True,
+            ):
+                captured.update(
+                    dict(
+                        name=name,
+                        kind=kind,
+                        attributes=attributes,
+                        record_exception=record_exception,
+                        set_status_on_exception=set_status_on_exception,
+                    )
+                )
                 yield MagicMock()
 
         original_otel_span = mcp_otel.otel_span
@@ -153,6 +167,7 @@ class TestPatchMcpOtelCompatibility:
         mcp_otel._tracer = _CapturingTracer()
         try:
             import chuk_mcp_runtime.entry as entry_mod
+
             entry_mod._patch_mcp_otel_compatibility()
 
             with mcp_otel.otel_span(
