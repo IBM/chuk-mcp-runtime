@@ -7,8 +7,10 @@ with native session management and automatic chuk_artifacts integration.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 import sys
+from contextlib import contextmanager
 from inspect import iscoroutinefunction
 from pathlib import Path
 from typing import Any, Iterable, List, Optional, Tuple, Union
@@ -40,6 +42,66 @@ from chuk_mcp_runtime.tools import (
 from chuk_mcp_runtime.types import RuntimeConfig
 
 logger = get_logger("chuk_mcp_runtime.entry")
+
+
+# ───────────────────────────── OpenTelemetry Compatibility Patch ───────────
+def _patch_mcp_otel_compatibility() -> None:
+    """Wrap mcp.shared._otel.otel_span to support tracers that do not accept
+    the ``context`` keyword argument (e.g. instana-opentelemetry / InstanaTracer
+    injected via Instana AutoTrace).
+
+    The standard OpenTelemetry API includes ``context`` in
+    ``start_as_current_span``, but some vendor tracers implement an older or
+    trimmed interface that raises ``TypeError`` when the keyword is passed.
+    This patch is a no-op when the active tracer already accepts ``context``.
+    """
+    try:
+        import mcp.shared._otel as mcp_otel  # noqa: PLC0415
+    except ImportError:
+        return  # mcp not installed – nothing to patch
+
+    orig_tracer = mcp_otel._tracer
+    try:
+        sig = inspect.signature(orig_tracer.start_as_current_span)
+        supports_context = "context" in sig.parameters
+    except (ValueError, TypeError):
+        supports_context = False
+
+    if supports_context:
+        return  # standard-compliant tracer – patch not needed
+
+    logger.warning(
+        "Active OpenTelemetry tracer (%s) does not accept 'context' in "
+        "start_as_current_span; applying compatibility shim so that "
+        "chuk-mcp-runtime works without errors. Spans will still be captured.",
+        type(orig_tracer).__name__,
+    )
+
+    orig_start = orig_tracer.start_as_current_span
+
+    @contextmanager
+    def _safe_otel_span(
+        name: str,
+        *,
+        kind,
+        attributes=None,
+        context=None,  # accepted but silently dropped for incompatible tracers
+        record_exception: bool = True,
+        set_status_on_exception: bool = True,
+    ):
+        with orig_start(
+            name,
+            kind=kind,
+            attributes=attributes,
+            record_exception=record_exception,
+            set_status_on_exception=set_status_on_exception,
+        ) as span:
+            yield span
+
+    mcp_otel.otel_span = _safe_otel_span
+
+
+_patch_mcp_otel_compatibility()
 
 # ───────────────────────────── Tool Registration ──────────────────────────
 
