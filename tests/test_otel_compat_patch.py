@@ -138,7 +138,9 @@ class TestPatch:
 
         class Standard:
             @contextmanager
-            def start_as_current_span(self, name, *, kind=None, attributes=None, context=None, **kw):
+            def start_as_current_span(
+                self, name, *, kind=None, attributes=None, context=None, **kw
+            ):
                 seen["context"] = context
                 yield _Span()
 

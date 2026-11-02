@@ -586,7 +586,7 @@ wheels = [
 
 [[package]]
 name = "chuk-mcp-runtime"
-version = "0.12.0a4"
+version = "0.12.0a5"
 source = { editable = "." }
 dependencies = [
     { name = "chuk-artifacts" },
