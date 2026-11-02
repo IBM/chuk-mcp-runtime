@@ -149,7 +149,8 @@ def _patch_mcp_otel_compatibility() -> None:
     if tracer is None or isinstance(tracer, _BestEffortTracer):
         return
 
-    mcp_otel._tracer = _BestEffortTracer(tracer)
+    # The wrapper is duck-typed (it forwards unknown attributes), not a ``Tracer`` subclass.
+    mcp_otel._tracer = _BestEffortTracer(tracer)  # type: ignore[assignment]
 
 
 _patch_mcp_otel_compatibility()
