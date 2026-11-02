@@ -1,197 +1,163 @@
 # tests/test_otel_compat_patch.py
 """
-Tests for the Instana / non-standard OTel tracer compatibility patch in entry.py.
+Tests for the best-effort tracer wrapper in entry.py.
 
-The patch wraps mcp.shared._otel.otel_span so that tracers whose
-start_as_current_span does NOT accept a 'context' keyword argument no longer
-cause a TypeError crash at runtime.
+Instana AutoTrace can leave a tracer whose ``start_as_current_span`` has no ``context``
+parameter (Instana Python < 3.12). mcp 2.x always passes ``context=``, which used to raise
+``TypeError`` inside ``initialize``. These tests exercise the call sites mcp really uses
+(``mcp.server._otel`` and ``mcp.shared.jsonrpc_dispatcher`` bind ``otel_span`` by name), not
+just ``mcp.shared._otel.otel_span``.
 """
 
 from __future__ import annotations
 
-import importlib
 from contextlib import contextmanager
-from typing import Any
-from unittest.mock import MagicMock, patch
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+import mcp.server._otel as server_otel
+import mcp.shared._otel as mcp_otel
+import mcp.shared.jsonrpc_dispatcher as dispatcher
+import pytest
+from opentelemetry.trace import SpanKind
+
+from chuk_mcp_runtime.entry import _BestEffortTracer, _patch_mcp_otel_compatibility
+
+CALL_SITES = [
+    pytest.param(lambda: mcp_otel.otel_span, id="shared._otel"),
+    pytest.param(lambda: server_otel.otel_span, id="server middleware"),
+    pytest.param(lambda: dispatcher.otel_span, id="client dispatcher"),
+]
 
 
-class _StandardTracer:
-    """Mimics a fully-compliant OTel tracer (accepts 'context')."""
+class _Span:
+    def __init__(self):
+        self.attributes = {}
+
+    def set_attribute(self, key, value):
+        self.attributes[key] = value
+
+
+class _OldTracer:
+    """Like Instana < 3.12: ``span_context`` instead of ``context``."""
+
+    def __init__(self):
+        self.calls = []
 
     @contextmanager
     def start_as_current_span(
         self,
-        name: str,
-        *,
+        name,
+        span_context=None,
         kind=None,
         attributes=None,
-        context=None,
-        record_exception: bool = True,
-        set_status_on_exception: bool = True,
+        record_exception=True,
+        set_status_on_exception=True,
     ):
-        span = MagicMock()
-        yield span
+        self.calls.append(dict(name=name, kind=kind, attributes=attributes))
+        yield _Span()
 
 
-class _InstanaTracer:
-    """Mimics InstanaTracer: start_as_current_span has NO 'context' param."""
+class _BrokenTracer:
+    def start_as_current_span(self, name, **kwargs):
+        raise RuntimeError("agent unavailable")
 
+
+class _BrokenCloseTracer:
     @contextmanager
-    def start_as_current_span(
-        self,
-        name: str,
-        *,
-        kind=None,
-        attributes=None,
-        record_exception: bool = True,
-        set_status_on_exception: bool = True,
-    ):
-        span = MagicMock()
-        yield span
+    def start_as_current_span(self, name, **kwargs):
+        yield _Span()
+        raise RuntimeError("export failed")
 
 
-def _reload_entry_with_tracer(tracer):
-    """Reload entry module with mcp_otel._tracer set to *tracer*."""
-    import mcp.shared._otel as mcp_otel
+class _BrokenSpanTracer:
+    @contextmanager
+    def start_as_current_span(self, name, **kwargs):
+        class Span:
+            def set_attribute(self, *a, **k):
+                raise RuntimeError("span broken")
 
-    original_tracer = mcp_otel._tracer
-    mcp_otel._tracer = tracer
-    try:
-        import chuk_mcp_runtime.entry as entry_mod
-
-        importlib.reload(entry_mod)
-        return entry_mod, mcp_otel
-    finally:
-        mcp_otel._tracer = original_tracer
+        yield Span()
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
+@pytest.fixture
+def install(monkeypatch):
+    def _install(tracer):
+        monkeypatch.setattr(mcp_otel, "_tracer", tracer)
+        _patch_mcp_otel_compatibility()
+        return tracer
+
+    return _install
 
 
-class TestPatchMcpOtelCompatibility:
-    def test_no_op_for_standard_tracer(self):
-        """Patch must NOT replace otel_span when tracer already accepts context."""
-        import mcp.shared._otel as mcp_otel
+def _enter(fn, body=lambda span: span.set_attribute("k", "v")):
+    with fn("initialize", kind=SpanKind.SERVER, attributes={"a": 1}, context=None) as span:
+        body(span)
+    return "ok"
 
-        original_otel_span = mcp_otel.otel_span
-        mcp_otel._tracer = _StandardTracer()
-        try:
-            import chuk_mcp_runtime.entry as entry_mod
 
-            entry_mod._patch_mcp_otel_compatibility()
-            # Should still be the original function, not replaced
-            assert mcp_otel.otel_span is original_otel_span
-        finally:
-            mcp_otel.otel_span = original_otel_span
+@pytest.mark.parametrize("get_fn", CALL_SITES)
+class TestAllCallSites:
+    def test_tracer_without_context_param(self, install, get_fn):
+        tracer = install(_OldTracer())
+        assert _enter(get_fn()) == "ok"
+        assert tracer.calls and tracer.calls[0]["attributes"] == {"a": 1}  # span still recorded
 
-    def test_patch_applied_for_instana_tracer(self):
-        """Patch MUST replace otel_span when tracer lacks 'context' param."""
-        import mcp.shared._otel as mcp_otel
+    def test_tracer_that_always_fails(self, install, get_fn):
+        install(_BrokenTracer())
+        assert _enter(get_fn()) == "ok"
 
-        original_otel_span = mcp_otel.otel_span
-        original_tracer = mcp_otel._tracer
-        mcp_otel._tracer = _InstanaTracer()
-        try:
-            import chuk_mcp_runtime.entry as entry_mod
+    def test_failure_when_closing_span(self, install, get_fn):
+        install(_BrokenCloseTracer())
+        assert _enter(get_fn()) == "ok"
 
-            entry_mod._patch_mcp_otel_compatibility()
-            assert mcp_otel.otel_span is not original_otel_span, (
-                "otel_span should have been replaced with the shim"
-            )
-        finally:
-            mcp_otel.otel_span = original_otel_span
-            mcp_otel._tracer = original_tracer
+    def test_failing_span_method(self, install, get_fn):
+        install(_BrokenSpanTracer())
+        assert _enter(get_fn()) == "ok"
 
-    def test_shim_accepts_context_kwarg_without_error(self):
-        """The shim must accept 'context' without raising TypeError."""
-        import mcp.shared._otel as mcp_otel
-        from opentelemetry.trace import SpanKind
+    @pytest.mark.parametrize("tracer", [_OldTracer, _BrokenTracer, _BrokenCloseTracer])
+    def test_request_exception_still_propagates(self, install, get_fn, tracer):
+        install(tracer())
 
-        original_otel_span = mcp_otel.otel_span
-        original_tracer = mcp_otel._tracer
-        mcp_otel._tracer = _InstanaTracer()
-        try:
-            import chuk_mcp_runtime.entry as entry_mod
+        def boom(span):
+            raise ValueError("tool failed")
 
-            entry_mod._patch_mcp_otel_compatibility()
+        with pytest.raises(ValueError, match="tool failed"):
+            _enter(get_fn(), boom)
 
-            # Simulate what mcp internals do: call otel_span with context=...
-            with mcp_otel.otel_span(
-                "test-span",
-                kind=SpanKind.CLIENT,
-                attributes={"key": "value"},
-                context=MagicMock(),  # <-- this must NOT crash
-            ) as span:
-                assert span is not None
-        finally:
-            mcp_otel.otel_span = original_otel_span
-            mcp_otel._tracer = original_tracer
 
-    def test_shim_forwards_other_kwargs_to_tracer(self):
-        """The shim must pass name, kind, attributes, record_exception, etc. through."""
-        import mcp.shared._otel as mcp_otel
-        from opentelemetry.trace import SpanKind
+class TestPatch:
+    def test_idempotent(self, install):
+        install(_OldTracer())
+        wrapped = mcp_otel._tracer
+        _patch_mcp_otel_compatibility()
+        assert mcp_otel._tracer is wrapped
+        assert isinstance(wrapped, _BestEffortTracer)
+        assert not isinstance(wrapped._tracer, _BestEffortTracer)
 
-        captured: dict[str, Any] = {}
+    def test_standard_tracer_receives_context(self, install):
+        seen = {}
 
-        class _CapturingTracer:
+        class Standard:
             @contextmanager
-            def start_as_current_span(
-                self,
-                name,
-                *,
-                kind=None,
-                attributes=None,
-                record_exception=True,
-                set_status_on_exception=True,
-            ):
-                captured.update(
-                    dict(
-                        name=name,
-                        kind=kind,
-                        attributes=attributes,
-                        record_exception=record_exception,
-                        set_status_on_exception=set_status_on_exception,
-                    )
-                )
-                yield MagicMock()
+            def start_as_current_span(self, name, *, kind=None, attributes=None, context=None, **kw):
+                seen["context"] = context
+                yield _Span()
 
-        original_otel_span = mcp_otel.otel_span
-        original_tracer = mcp_otel._tracer
-        mcp_otel._tracer = _CapturingTracer()
-        try:
-            import chuk_mcp_runtime.entry as entry_mod
+        install(Standard())
+        sentinel = object()
+        with mcp_otel.otel_span("x", kind=SpanKind.SERVER, context=sentinel):
+            pass
+        assert seen["context"] is sentinel  # nothing dropped when the tracer supports it
 
-            entry_mod._patch_mcp_otel_compatibility()
+    def test_unrelated_type_error_from_tracer_is_not_retried_forever(self, install):
+        class Odd:
+            def start_as_current_span(self, name, **kwargs):
+                raise TypeError("something else entirely")
 
-            with mcp_otel.otel_span(
-                "my-op",
-                kind=SpanKind.SERVER,
-                attributes={"http.method": "GET"},
-                record_exception=False,
-                set_status_on_exception=False,
-            ):
-                pass
+        install(Odd())
+        assert _enter(mcp_otel.otel_span) == "ok"  # falls back to a no-op span
 
-            assert captured["name"] == "my-op"
-            assert captured["kind"] == SpanKind.SERVER
-            assert captured["attributes"] == {"http.method": "GET"}
-            assert captured["record_exception"] is False
-            assert captured["set_status_on_exception"] is False
-        finally:
-            mcp_otel.otel_span = original_otel_span
-            mcp_otel._tracer = original_tracer
+    def test_missing_otel_module_is_ignored(self, monkeypatch):
+        import sys
 
-    def test_patch_survives_missing_mcp_otel(self):
-        """_patch_mcp_otel_compatibility must not raise if mcp is not importable."""
-        import chuk_mcp_runtime.entry as entry_mod
-
-        with patch.dict("sys.modules", {"mcp.shared._otel": None}):
-            # Should return silently without raising
-            entry_mod._patch_mcp_otel_compatibility()
+        monkeypatch.setitem(sys.modules, "mcp.shared._otel", None)
+        _patch_mcp_otel_compatibility()  # must not raise

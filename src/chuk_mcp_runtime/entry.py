@@ -7,10 +7,8 @@ with native session management and automatic chuk_artifacts integration.
 from __future__ import annotations
 
 import asyncio
-import inspect
 import os
 import sys
-from contextlib import contextmanager
 from inspect import iscoroutinefunction
 from pathlib import Path
 from typing import Any, Iterable, List, Optional, Tuple, Union
@@ -45,60 +43,113 @@ logger = get_logger("chuk_mcp_runtime.entry")
 
 
 # ───────────────────────────── OpenTelemetry Compatibility Patch ───────────
-def _patch_mcp_otel_compatibility() -> None:
-    """Wrap mcp.shared._otel.otel_span to support tracers that do not accept
-    the ``context`` keyword argument (e.g. instana-opentelemetry / InstanaTracer
-    injected via Instana AutoTrace).
+class _BestEffortSpan:
+    """Span proxy: a failing span method (set_attributes, set_status, ...) never raises."""
 
-    The standard OpenTelemetry API includes ``context`` in
-    ``start_as_current_span``, but some vendor tracers implement an older or
-    trimmed interface that raises ``TypeError`` when the keyword is passed.
-    This patch is a no-op when the active tracer already accepts ``context``.
+    def __init__(self, span: Any) -> None:
+        self._span = span
+
+    def __getattr__(self, name: str) -> Any:
+        attr = getattr(self._span, name)
+        if not callable(attr):
+            return attr
+
+        def call(*args: Any, **kwargs: Any) -> Any:
+            try:
+                return attr(*args, **kwargs)
+            except Exception:  # tracing must never break a request
+                logger.debug("span.%s failed; ignoring", name, exc_info=True)
+                return None
+
+        return call
+
+
+class _BestEffortSpanContext:
+    """Context manager around ``tracer.start_as_current_span`` that cannot fail the request."""
+
+    def __init__(self, tracer: Any, name: str, kwargs: dict[str, Any]) -> None:
+        self._tracer = tracer
+        self._name = name
+        self._kwargs = dict(kwargs)
+        self._cm: Any = None
+
+    def _open(self) -> Tuple[Any, Any]:
+        while True:
+            try:
+                cm = self._tracer.start_as_current_span(self._name, **self._kwargs)
+                return cm, cm.__enter__()
+            except TypeError as exc:
+                # Older vendor tracers reject keywords the OTel API defines (e.g. ``context``).
+                bad = next((k for k in self._kwargs if f"'{k}'" in str(exc)), None)
+                if bad is None:
+                    raise
+                self._kwargs.pop(bad)
+
+    def __enter__(self) -> Any:
+        try:
+            self._cm, span = self._open()
+        except Exception:  # tracing must never break a request
+            self._cm = None
+            logger.warning(
+                "OpenTelemetry tracer (%s) failed to start a span; "
+                "continuing without tracing for this call",
+                type(self._tracer).__name__,
+                exc_info=logger.isEnabledFor(10),
+            )
+            from opentelemetry.trace import INVALID_SPAN  # noqa: PLC0415
+
+            return INVALID_SPAN
+        return _BestEffortSpan(span)
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+        if self._cm is None:
+            return False
+        try:
+            return bool(self._cm.__exit__(exc_type, exc, tb))
+        except Exception:  # an exporter failure must not mask or replace the request result
+            logger.debug("closing span failed; ignoring", exc_info=True)
+            return False  # the request's own exception, if any, still propagates
+
+
+class _BestEffortTracer:
+    """Wraps the tracer used by ``mcp.shared._otel`` so that tracing is best-effort."""
+
+    def __init__(self, tracer: Any) -> None:
+        self._tracer = tracer
+
+    def start_as_current_span(self, name: str, **kwargs: Any) -> _BestEffortSpanContext:
+        return _BestEffortSpanContext(self._tracer, name, kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._tracer, name)
+
+
+def _patch_mcp_otel_compatibility() -> None:
+    """Make mcp's tracing best-effort so a vendor tracer cannot break requests.
+
+    mcp 2.x calls ``_tracer.start_as_current_span(..., context=...)`` on every request. Tracers
+    injected by Instana AutoTrace (Instana Python < 3.12) take ``span_context=`` instead, so the
+    call raised ``TypeError`` and ``initialize`` failed.
+
+    The module-level ``_tracer`` is wrapped rather than ``otel_span``: ``mcp.server._otel`` and
+    ``mcp.shared.jsonrpc_dispatcher`` bind ``otel_span`` by name at import time, so replacing the
+    function would not reach them. ``otel_span`` reads ``_tracer`` on each call, so every caller
+    gets the wrapper.
+
+    Behaviour: a keyword the tracer rejects is dropped and the span is kept (parent trace linking
+    is lost); any other tracer failure falls back to a no-op span; errors raised by the request
+    itself propagate unchanged. Idempotent.
     """
     try:
         import mcp.shared._otel as mcp_otel  # noqa: PLC0415
     except ImportError:
         return  # mcp not installed – nothing to patch
 
-    orig_tracer = mcp_otel._tracer
-    try:
-        sig = inspect.signature(orig_tracer.start_as_current_span)
-        supports_context = "context" in sig.parameters
-    except (ValueError, TypeError):
-        supports_context = False
+    tracer = getattr(mcp_otel, "_tracer", None)
+    if tracer is None or isinstance(tracer, _BestEffortTracer):
+        return
 
-    if supports_context:
-        return  # standard-compliant tracer – patch not needed
-
-    logger.warning(
-        "Active OpenTelemetry tracer (%s) does not accept 'context' in "
-        "start_as_current_span; applying compatibility shim so that "
-        "chuk-mcp-runtime works without errors. Spans will still be captured.",
-        type(orig_tracer).__name__,
-    )
-
-    orig_start = orig_tracer.start_as_current_span
-
-    @contextmanager
-    def _safe_otel_span(
-        name: str,
-        *,
-        kind,
-        attributes=None,
-        context=None,  # accepted but silently dropped for incompatible tracers
-        record_exception: bool = True,
-        set_status_on_exception: bool = True,
-    ):
-        with orig_start(
-            name,
-            kind=kind,
-            attributes=attributes,
-            record_exception=record_exception,
-            set_status_on_exception=set_status_on_exception,
-        ) as span:
-            yield span
-
-    mcp_otel.otel_span = _safe_otel_span
+    mcp_otel._tracer = _BestEffortTracer(tracer)
 
 
 _patch_mcp_otel_compatibility()
