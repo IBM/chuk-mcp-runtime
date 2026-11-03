@@ -11,14 +11,17 @@ requires-python = ">=3.11"
 license = {text = "Apache-2.0"}
 
 dependencies = [
+  "aiohttp>=3.14.4",        # Transitive dep
   "pydantic>=2.10.6",
   "pyyaml>=6.0.2",
   "pyjwt>=2.15.1",
+  "certifi>=2026.10.18",    # Transitive dep
   "cryptography>=50.0.1",
   "uvicorn>=0.34.0",
   "chuk-artifacts>=0.11.1",
   "chuk-sessions>=0.6.1",
   "mcp>=2.3.0,<3",
+  "multidict>=6.9.1",       # Transitive dep
   "jsonschema>=4.20.0",
 ]
 
